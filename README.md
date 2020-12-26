@@ -1,3 +1,3 @@
-# Repository/Project Name
+# FERI-NuriSolver
 
-Base project description...
+Nurikabe Solver at Optimization Methods (slo. Optimizacijske Metode).
