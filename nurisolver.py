@@ -13,10 +13,14 @@ PLOT_DELAY = 0.5
 
 
 class State(IntEnum):
-    UNKNOWN = -2  # White
-    SEA = -1  # Black
-    ISLAND = 0  # Dot
-    # > 0  Island value
+    UNKNOWN = -2  # White (dot in unsolved source)
+    SEA = -1  # Black (dot in solved source)
+    ISLAND = 0  # Dot (number in source)
+    # > 0  Island value (number in source)
+
+
+def load(file, dot_value=State.UNKNOWN):
+    return np.genfromtxt(file, dtype=np.int8, filling_values=dot_value)
 
 
 class Plotter():
@@ -67,9 +71,7 @@ class Plotter():
         pygame.display.update(rect)
 
     def plot(self, puzzle):
-        if puzzle.shape != self.shape:
-            print(f"error! puzzle size {puzzle.shape} not same as plot size {self.shape}")
-            return 1
+        assert puzzle.shape == self.shape, f"error! puzzle size {puzzle.shape} not same as plot size {self.shape}"
 
         for y in range(puzzle.shape[0]):
             for x in range(puzzle.shape[1]):
@@ -90,14 +92,19 @@ class Solver():
             self.plotter.plot_cell(y, x, state)
 
     def solve(self):
-        # TODO
+        # return load("test/wikipedia_easy-solved.txt", dot_value=State.SEA)
+
+        # TODO Mark all impossible neighbours (Sea)
+        # TODO Mark out-of-range of any island (Sea)
+
+        # TODO Mark all cells around full island (Sea)
+        # TODO Connect alone Seas (Sea)
+
+        # TEST
         self.set_cell(1, 0, State.SEA)
         self.set_cell(2, 0, State.SEA)
+
         return self.puzzle
-
-
-def load(file, dot_value=State.UNKNOWN):
-    return np.genfromtxt(file, dtype=np.int8, delimiter=1, filling_values=dot_value)
 
 
 def test():
@@ -105,7 +112,7 @@ def test():
     solved_suffix = "-solved"
 
     print("--- TEST START ---")
-    errors = 0
+    errors, warnings = 0, 0
 
     for file in os.listdir(test_folder):
         name, ext = os.path.splitext(file)
@@ -126,10 +133,12 @@ def test():
                     errors += 1
             else:
                 print(" NOT FOUND")
-                errors += 1
+                warnings += 1
 
     if errors:
         print("--- TEST FAIL ---")
+    elif warnings:
+        print("--- TEST WARN ---")
     else:
         print("--- TEST SUCCESS ---")
 
@@ -161,11 +170,10 @@ def main():
     plotter, verbose_plotter = None, None
     if args.plot:
         plotter = Plotter(puzzle.shape)
+        plotter.plot(puzzle)
 
         if args.verbose:
             verbose_plotter = plotter
-
-        plotter.plot(puzzle)
 
     # Solve
     print(f"Solving:\n{puzzle}")
