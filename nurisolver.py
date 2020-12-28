@@ -9,7 +9,7 @@ from enum import IntEnum
 import numpy as np
 
 
-PLOT_DELAY = 0.5
+PLOT_DELAY = 500  # milliseconds
 
 
 class State(IntEnum):
@@ -29,12 +29,13 @@ class Plotter():
 
     def __init__(self, shape):
         self.shape = shape  # (height, width)
+        height, width = self.shape
 
         global pygame
         import pygame
         pygame.init()
 
-        screen_shape = (shape[1] * self.FONT_SIZE + self.LINE_WIDTH, shape[0] * self.FONT_SIZE + self.LINE_WIDTH)
+        screen_shape = (width * self.FONT_SIZE + self.LINE_WIDTH, height * self.FONT_SIZE + self.LINE_WIDTH)
         self.screen = pygame.display.set_mode(screen_shape)
 
         pygame.display.set_caption("NuriSolver")
@@ -42,12 +43,12 @@ class Plotter():
         self.screen.fill(pygame.Color("white"))
 
         # Grid
-        for i in range(self.shape[1] + 1):
+        for i in range(width + 1):
             start_pos = (i * self.FONT_SIZE, 0)
             end_pos = (i * self.FONT_SIZE, self.screen.get_height())
             pygame.draw.line(self.screen, pygame.Color("black"), start_pos, end_pos, width=self.LINE_WIDTH)
 
-        for i in range(self.shape[0] + 1):
+        for i in range(height + 1):
             start_pos = (0, i * self.FONT_SIZE)
             end_pos = (self.screen.get_width(), i * self.FONT_SIZE)
             pygame.draw.line(self.screen, pygame.Color("black"), start_pos, end_pos, width=self.LINE_WIDTH)
@@ -73,9 +74,18 @@ class Plotter():
     def plot(self, puzzle):
         assert puzzle.shape == self.shape, f"error! puzzle size {puzzle.shape} not same as plot size {self.shape}"
 
-        for y in range(puzzle.shape[0]):
-            for x in range(puzzle.shape[1]):
+        height, width = puzzle.shape
+
+        for x in range(width):
+            for y in range(height):
                 self.plot_cell(y, x, puzzle[y, x])
+
+    def handle_events(self, puzzle):
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:  # graceful quit
+                raise KeyboardInterrupt()
+            elif ev.type == pygame.VIDEOEXPOSE:  # redraw on focus
+                self.plot(puzzle)
 
 
 class Solver():
@@ -85,24 +95,55 @@ class Solver():
 
     def set_cell(self, y, x, state):
         assert self.puzzle[y, x] <= 0, f"unable to change island center ({y}, {x})"
-        self.puzzle[y, x] = state
 
-        if self.plotter:
-            time.sleep(PLOT_DELAY)
-            self.plotter.plot_cell(y, x, state)
+        if self.puzzle[y, x] != state:
+            self.puzzle[y, x] = state
+
+            if self.plotter:
+                pygame.time.wait(PLOT_DELAY)
+                self.plotter.plot_cell(y, x, state)
+                self.plotter.handle_events(self.puzzle)
 
     def solve(self):
         # return load("test/wikipedia_easy-solved.txt", dot_value=State.SEA)
 
-        # TODO Mark all impossible neighbours (Sea)
-        # TODO Mark out-of-range of any island (Sea)
+        height, width = self.puzzle.shape
 
-        # TODO Mark all cells around full island (Sea)
+        for x in range(width):
+            for y in range(height):
+                # Impossible diagonal neighbours (Sea)
+                if 0 < x < width - 1 and 0 < y < height - 1 and self.puzzle[y, x] > 0:
+                    # Only check up-left and up-right (down-left and down-right are just mirrored)
+                    if self.puzzle[y - 1, x - 1] > 0:
+                        self.set_cell(y - 1, x, State.SEA)
+                        self.set_cell(y, x - 1, State.SEA)
+                    elif self.puzzle[y + 1, x - 1] > 0:
+                        self.set_cell(y + 1, x, State.SEA)
+                        self.set_cell(y, x - 1, State.SEA)
+
+                # Sea between horizontal/vertical island centers (Sea)
+                if x < width - 2:
+                    if self.puzzle[y, x] > 0 and self.puzzle[y, x + 2] > 0:
+                        self.set_cell(y, x + 1, State.SEA)
+                if y < height - 2:
+                    if self.puzzle[y, x] > 0 and self.puzzle[y + 2, x] > 0:
+                        self.set_cell(y + 1, x, State.SEA)
+
+                # Neighbours of '1' island (Sea)
+                if self.puzzle[y, x] == 1:
+                    if y > 0:
+                        self.set_cell(y - 1, x, State.SEA)
+                    if y < height - 1:
+                        self.set_cell(y + 1, x, State.SEA)
+                    if x > 0:
+                        self.set_cell(y, x - 1, State.SEA)
+                    if x < width - 1:
+                        self.set_cell(y, x + 1, State.SEA)
+
+        # TODO Out-of-range of any island (Sea)
+
+        # TODO Cells around full island (Sea)
         # TODO Connect alone Seas (Sea)
-
-        # TEST
-        self.set_cell(1, 0, State.SEA)
-        self.set_cell(2, 0, State.SEA)
 
         return self.puzzle
 
@@ -192,9 +233,7 @@ def main():
         # Keep alive until close
         try:
             while True:
-                for ev in pygame.event.get():
-                    if ev.type == pygame.QUIT:
-                        raise KeyboardInterrupt()
+                plotter.handle_events(solved)
         except KeyboardInterrupt:
             pass
 
