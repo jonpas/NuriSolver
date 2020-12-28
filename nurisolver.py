@@ -140,10 +140,16 @@ class Solver():
                     if x < width - 1:
                         self.set_cell(y, x + 1, State.SEA)
 
+        # TODO Only possible island cells (Island)
+        # wiki-hard: top-right 2 can only go down (and can then be encompassed in Sea)
+        # wiki-hard: right 5 can only go left (but is not yet finished)
+
         # TODO Out-of-range of any island (Sea)
 
         # TODO Cells around full island (Sea)
+
         # TODO Connect alone Seas (Sea)
+        # wiki-easy: bottom-left must connect one up
 
         return self.puzzle
 
@@ -189,7 +195,7 @@ def test():
 def main():
     # Parse arguments
     parser = argparse.ArgumentParser(description="Nurikabe Solver")
-    parser.add_argument("file", type=str, nargs="?", help="read puzzle from file")
+    parser.add_argument("file", type=str, nargs="?", help="read puzzle from file (run tests if none)")
     parser.add_argument("--plot", "-p", action="store_true", help="plot solution (requires pygame)")
     parser.add_argument("--verbose", "-v", action="store_true", help="plot solving steps (requires pygame)")
     args = parser.parse_args()
