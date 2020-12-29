@@ -86,6 +86,9 @@ class Plotter():
                 raise KeyboardInterrupt()
             elif ev.type == pygame.VIDEOEXPOSE:  # redraw on focus
                 self.plot(puzzle)
+            elif ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_q:
+                    raise KeyboardInterrupt()
 
 
 class Solver():
@@ -93,23 +96,24 @@ class Solver():
         self.puzzle = puzzle
         self.plotter = plotter
 
-        self.prepare()  # sets: self.sea_size
+        self.prepare()
 
     def prepare(self):
-        height, width = self.puzzle.shape
+        self.solved = False
+        self.height, self.width = self.puzzle.shape
 
         # Verify puzzle input
-        assert height > 0 and width > 0, f"invalid puzzle size ({height}, {width})"
+        assert self.height > 0 and self.width > 0, f"invalid puzzle size ({self.height}, {self.width})"
 
         # Adjacent cells can't be islands (only need to check right or down)
-        for x in range(width - 1):
-            for y in range(height - 1):
+        for x in range(self.width - 1):
+            for y in range(self.height - 1):
                 if self.puzzle[y, x] > 0:
                     assert self.puzzle[y + 1, x] <= 0 or self.puzzle[y, x + 1] <= 0, "adjacent starting islands"
 
         # Pre-calculate amount of black (Sea) cells
         # width * height - (sum of all numbered cells)
-        self.sea_size = width * height - np.sum(self.puzzle[self.puzzle > 0])
+        self.sea_size = self.width * self.height - np.sum(self.puzzle[self.puzzle > 0])
 
     def validate(self):
         full_sea = np.sum(self.puzzle[self.puzzle == State.SEA]) == self.sea_size
@@ -128,15 +132,76 @@ class Solver():
                 self.plotter.plot_cell(y, x, state)
                 self.plotter.handle_events(self.puzzle)
 
+    def four_way(self, y, x, state=None, func=None):
+        if y > 0 and self.puzzle[y - 1, x] == State.UNKNOWN:
+            if func:
+                func(y - 1, x)
+            if state:
+                self.set_cell(y - 1, x, state)
+        if y < self.height - 1 and self.puzzle[y + 1, x] == State.UNKNOWN:
+            if func:
+                func(y + 1, x)
+            if state:
+                self.set_cell(y + 1, x, state)
+        if x > 0 and self.puzzle[y, x - 1] == State.UNKNOWN:
+            if func:
+                func(y, x - 1)
+            if state:
+                self.set_cell(y, x - 1, state)
+        if x < self.width - 1 and self.puzzle[y, x + 1] == State.UNKNOWN:
+            if func:
+                func(y, x + 1)
+            if state:
+                self.set_cell(y, x + 1, state)
+
+    def extend_islands(self):
+        # TODO Check if any cell can extend any single way
+        extended = 0
+
+        for (y, x), cells in self.islands.items():
+            left = self.puzzle[y, x] - len(cells)
+            if left > 0:
+                ways = []
+                self.four_way(y, x, None, lambda ny, nx: ways.append((ny, nx)))
+
+                if len(ways) == 1:
+                    extended += 1
+
+                    ny, nx = ways[0]
+                    self.set_cell(ny, nx, State.ISLAND)
+                    self.islands[y, x].append((ny, nx))
+
+        return extended
+
+    def wrap_full_islands(self):
+        wrapped = 0
+
+        for center, cells in self.islands.copy().items():
+            if len(cells) == self.puzzle[center]:
+                wrapped += 1
+
+                for (cy, cx) in cells.copy():
+                    self.four_way(cy, cx, State.SEA)
+
+                # Cleanup full island from further processing
+                del self.islands[center]
+
+        return wrapped
+
     def solve(self):
-        # return load("test/wikipedia_easy-solved.txt", dot_value=State.SEA)  # DEBUG
+        assert not self.solved, "already solved"
 
-        height, width = self.puzzle.shape
+        self.islands = dict()  # (y, x): [coordinates]
 
-        for x in range(width):
-            for y in range(height):
+        # First logical pass and data preparation
+        for x in range(self.width):
+            for y in range(self.height):
+                # Compose islands
+                if self.puzzle[y, x] > 1:  # > 1 as we already encompass '1' islands during this data preparation
+                    self.islands[y, x] = [(y, x)]
+
                 # Impossible diagonal neighbours (Sea)
-                if 0 < x < width - 1 and 0 < y < height - 1 and self.puzzle[y, x] > 0:
+                if 0 < x < self.width - 1 and 0 < y < self.height - 1 and self.puzzle[y, x] > 0:
                     # Only check up-left and up-right (down-left and down-right are just mirrored)
                     if self.puzzle[y - 1, x - 1] > 0:
                         self.set_cell(y - 1, x, State.SEA)
@@ -146,36 +211,38 @@ class Solver():
                         self.set_cell(y, x - 1, State.SEA)
 
                 # Sea between horizontal/vertical island centers (Sea)
-                if x < width - 2:
+                if x < self.width - 2:
                     if self.puzzle[y, x] > 0 and self.puzzle[y, x + 2] > 0:
                         self.set_cell(y, x + 1, State.SEA)
-                if y < height - 2:
+                if y < self.height - 2:
                     if self.puzzle[y, x] > 0 and self.puzzle[y + 2, x] > 0:
                         self.set_cell(y + 1, x, State.SEA)
 
                 # Neighbours of '1' island (Sea)
                 if self.puzzle[y, x] == 1:
-                    if y > 0:
-                        self.set_cell(y - 1, x, State.SEA)
-                    if y < height - 1:
-                        self.set_cell(y + 1, x, State.SEA)
-                    if x > 0:
-                        self.set_cell(y, x - 1, State.SEA)
-                    if x < width - 1:
-                        self.set_cell(y, x + 1, State.SEA)
+                    self.four_way(y, x, State.SEA)
 
-        # TODO Only possible island cells (Island)
-        # wiki-hard: top-right 2 can only go down (and can then be encompassed in Sea)
-        # wiki-hard: right 5 can only go left (but is not yet finished)
+        # Continue logical solving steps
+        while True:
+            # Only possible island extension (Island)
+            if self.extend_islands() == 0:
+                break
 
-        # TODO Out-of-range of any island (Sea)
+            # Cells around full island (Sea)
+            if self.wrap_full_islands() == 0:
+                break
 
-        # TODO Cells around full island (Sea)
+            # TODO Connect alone Seas (Sea)
+            # wiki-easy: bottom-left must connect one up
+            # wiki-hard: bottom-right (vertically between 5 and 2) must connect one left
+            # wiki-hard: middle (vertically between 2 and 3) must connect one left
 
-        # TODO Connect alone Seas (Sea)
-        # wiki-easy: bottom-left must connect one up
+            # TODO Out-of-range of any island (Sea) - Expensive
 
-        return self.puzzle  # if self.validate() else None
+        if self.validate():
+            self.solved = True
+
+        return self.solved
 
 
 def test():
@@ -196,11 +263,11 @@ def test():
                 solution = load(solution_file, dot_value=State.SEA)
 
                 solver = Solver(puzzle)
-                solved = solver.solve()
-                if np.array_equal(solved, solution):
+                success = solver.solve()
+                if success and np.array_equal(solver.puzzle, solution):
                     print(" OK")
                 else:
-                    print(f" ERROR\n{solved}")
+                    print(f" ERROR\n{solver.puzzle}")
                     errors += 1
             else:
                 print(" NOT FOUND")
@@ -248,36 +315,39 @@ def main():
 
     # Solve
     print(f"Solving...\n{puzzle}")
-    solver = Solver(puzzle.copy(), plotter=verbose_plotter)
+    solver = Solver(puzzle, plotter=verbose_plotter)
 
-    start = time.process_time()  # ignore sleep (visualization)
-    solved = solver.solve()
-    end = time.process_time()
+    try:
+        start = time.process_time()  # ignore sleep (visualization)
+        success = solver.solve()
+        end = time.process_time()
+    except KeyboardInterrupt:
+        pygame.quit()
+        return 2
+
     elapsed = (end - start) / 1000.0  # milliseconds
 
-    success = solved is not None
     if success:
-        print(f"Solved!\n{solved}")
+        print(f"Solved!\n{solver.puzzle}")
     else:
         print("Unsolved!")
-        solved = puzzle  # plotting needs
 
     print(f"Process Time: {elapsed} ms")
 
     # Plot solution
     if args.plot:
-        plotter.plot(solved)
+        plotter.plot(solver.puzzle)
 
         # Keep alive until close
         try:
             while True:
-                plotter.handle_events(solved)
+                plotter.handle_events(solver.puzzle)
         except KeyboardInterrupt:
             pass
 
         pygame.quit()
 
-    return success
+    return (0 if success else 1)
 
 
 if __name__ == "__main__":
