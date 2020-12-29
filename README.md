@@ -38,6 +38,4 @@ _Targetted at Python 3.9._
 ### Resources
 
 - [Nurikabe (puzzle)](https://en.wikipedia.org/wiki/Nurikabe_(puzzle))
-
-**Test Cases:**
 - [microsoft/nurikabe](https://github.com/microsoft/nurikabe)

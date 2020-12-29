@@ -6,7 +6,7 @@ import os
 import time
 from enum import IntEnum
 
-import numpy as np
+import numpy as np  # [y, x] or [height, width]
 
 
 PLOT_DELAY = 500  # milliseconds
@@ -93,6 +93,30 @@ class Solver():
         self.puzzle = puzzle
         self.plotter = plotter
 
+        self.prepare()  # sets: self.sea_size
+
+    def prepare(self):
+        height, width = self.puzzle.shape
+
+        # Verify puzzle input
+        assert height > 0 and width > 0, f"invalid puzzle size ({height}, {width})"
+
+        # Adjacent cells can't be islands (only need to check right or down)
+        for x in range(width - 1):
+            for y in range(height - 1):
+                if self.puzzle[y, x] > 0:
+                    assert self.puzzle[y + 1, x] <= 0 or self.puzzle[y, x + 1] <= 0, "adjacent starting islands"
+
+        # Pre-calculate amount of black (Sea) cells
+        # width * height - (sum of all numbered cells)
+        self.sea_size = width * height - np.sum(self.puzzle[self.puzzle > 0])
+
+    def validate(self):
+        full_sea = np.sum(self.puzzle[self.puzzle == State.SEA]) == self.sea_size
+        no_unknowns = np.sum(self.puzzle[self.puzzle == State.UNKNOWN]) == 0
+
+        return full_sea and no_unknowns
+
     def set_cell(self, y, x, state):
         assert self.puzzle[y, x] <= 0, f"unable to change island center ({y}, {x})"
 
@@ -105,7 +129,7 @@ class Solver():
                 self.plotter.handle_events(self.puzzle)
 
     def solve(self):
-        # return load("test/wikipedia_easy-solved.txt", dot_value=State.SEA)
+        # return load("test/wikipedia_easy-solved.txt", dot_value=State.SEA)  # DEBUG
 
         height, width = self.puzzle.shape
 
@@ -151,7 +175,7 @@ class Solver():
         # TODO Connect alone Seas (Sea)
         # wiki-easy: bottom-left must connect one up
 
-        return self.puzzle
+        return self.puzzle  # if self.validate() else None
 
 
 def test():
@@ -223,14 +247,22 @@ def main():
             verbose_plotter = plotter
 
     # Solve
-    print(f"Solving:\n{puzzle}")
+    print(f"Solving...\n{puzzle}")
     solver = Solver(puzzle.copy(), plotter=verbose_plotter)
 
     start = time.process_time()  # ignore sleep (visualization)
     solved = solver.solve()
     end = time.process_time()
+    elapsed = (end - start) / 1000.0  # milliseconds
 
-    print(f"Solved:\n{solved}\nProcess Time: {(end - start) / 1000.0} ms")
+    success = solved is not None
+    if success:
+        print(f"Solved!\n{solved}")
+    else:
+        print("Unsolved!")
+        solved = puzzle  # plotting needs
+
+    print(f"Process Time: {elapsed} ms")
 
     # Plot solution
     if args.plot:
@@ -245,7 +277,7 @@ def main():
 
         pygame.quit()
 
-    return 0
+    return success
 
 
 if __name__ == "__main__":
