@@ -132,38 +132,41 @@ class Solver():
                 self.plotter.plot_cell(y, x, state)
                 self.plotter.handle_events(self.puzzle)
 
-    def four_way(self, y, x, state=None, func=None):
-        if y > 0 and self.puzzle[y - 1, x] == State.UNKNOWN:
+    def four_way(self, y, x, state=None, func=None, check_state=State.UNKNOWN):
+        if y > 0 and self.puzzle[y - 1, x] == check_state:
             if func:
                 func(y - 1, x)
             if state:
                 self.set_cell(y - 1, x, state)
-        if y < self.height - 1 and self.puzzle[y + 1, x] == State.UNKNOWN:
+        if y < self.height - 1 and self.puzzle[y + 1, x] == check_state:
             if func:
                 func(y + 1, x)
             if state:
                 self.set_cell(y + 1, x, state)
-        if x > 0 and self.puzzle[y, x - 1] == State.UNKNOWN:
+        if x > 0 and self.puzzle[y, x - 1] == check_state:
             if func:
                 func(y, x - 1)
             if state:
                 self.set_cell(y, x - 1, state)
-        if x < self.width - 1 and self.puzzle[y, x + 1] == State.UNKNOWN:
+        if x < self.width - 1 and self.puzzle[y, x + 1] == check_state:
             if func:
                 func(y, x + 1)
             if state:
                 self.set_cell(y, x + 1, state)
 
     def extend_islands(self):
-        # TODO Check if any cell can extend any single way
         extended = 0
 
-        for (y, x), cells in self.islands.items():
+        for (y, x), cells in self.islands.copy().items():
             left = self.puzzle[y, x] - len(cells)
             if left > 0:
                 ways = []
-                self.four_way(y, x, None, lambda ny, nx: ways.append((ny, nx)))
 
+                # Check if any cell can extend any single way
+                for (cy, cx) in cells:
+                    self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)))
+
+                # Fill if only one possible way (guaranteed correct)
                 if len(ways) == 1:
                     extended += 1
 
@@ -187,6 +190,28 @@ class Solver():
                 del self.islands[center]
 
         return wrapped
+
+    def extend_seas(self):
+        # TODO Check Sea patch for connections
+        extended = 0
+
+        for x in range(self.width):
+            for y in range(self.height):
+                if self.puzzle[y, x] == State.SEA:
+                    neighbour_seas = []
+                    self.four_way(y, x, None, lambda ny, nx: neighbour_seas.append((ny, nx)), check_state=State.SEA)
+
+                    if len(neighbour_seas) == 0:
+                        ways = []
+                        self.four_way(y, x, None, lambda ny, nx: ways.append((ny, nx)))
+
+                        if len(ways) == 1:
+                            extended += 1
+
+                            ny, nx = ways[0]
+                            self.set_cell(ny, nx, State.SEA)
+
+        return extended
 
     def solve(self):
         assert not self.solved, "already solved"
@@ -225,19 +250,21 @@ class Solver():
         # Continue logical solving steps
         while True:
             # Only possible island extension (Island)
-            if self.extend_islands() == 0:
-                break
+            extended_islands = self.extend_islands()
 
             # Cells around full island (Sea)
-            if self.wrap_full_islands() == 0:
-                break
+            wrapped_islands = self.wrap_full_islands()
 
-            # TODO Connect alone Seas (Sea)
+            # Connect alone Seas (Sea)
+            extended_seas = self.extend_seas()
             # wiki-easy: bottom-left must connect one up
             # wiki-hard: bottom-right (vertically between 5 and 2) must connect one left
             # wiki-hard: middle (vertically between 2 and 3) must connect one left
 
             # TODO Out-of-range of any island (Sea) - Expensive
+
+            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0:
+                break
 
         if self.validate():
             self.solved = True
