@@ -4,6 +4,7 @@ import argparse
 import sys
 import os
 import time
+import logging
 import unittest
 from enum import IntEnum
 from operator import itemgetter
@@ -11,7 +12,8 @@ from operator import itemgetter
 import numpy as np  # [y, x] or [height, width]
 
 
-PLOT_DELAY = 500  # milliseconds
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s",
+                    handlers=[logging.FileHandler("nurisolver.log", "w", encoding="utf-8"), logging.StreamHandler()])
 
 
 class State(IntEnum):
@@ -29,9 +31,10 @@ class Plotter():
     FONT_SIZE = 50
     LINE_WIDTH = 2
 
-    def __init__(self, shape):
+    def __init__(self, shape, debug=False):
         self.shape = shape  # (height, width)
         height, width = self.shape
+        self.debug = debug
 
         global pygame
         import pygame
@@ -42,6 +45,7 @@ class Plotter():
 
         pygame.display.set_caption("NuriSolver")
         self.font = pygame.font.Font(None, self.FONT_SIZE)
+        self.font_small = pygame.font.Font(None, self.FONT_SIZE // 3)
         self.screen.fill(pygame.Color("white"))
 
         # Grid
@@ -60,6 +64,7 @@ class Plotter():
     def plot_cell(self, y, x, value):
         rect = (x * self.FONT_SIZE, y * self.FONT_SIZE, self.FONT_SIZE, self.FONT_SIZE)
 
+        # Type
         if value == State.SEA:
             self.screen.fill(pygame.Color("black"), rect)
         elif value == State.ISLAND:
@@ -67,9 +72,16 @@ class Plotter():
             cell = self.font.render(".", True, pygame.Color("black"))
             self.screen.blit(cell, location)
         elif value > 0:
-            location = (rect[0] + self.FONT_SIZE // 3, rect[1] + self.FONT_SIZE // 5)
+            long_offset = 10 if value >= 10 else 0
+            location = (rect[0] + self.FONT_SIZE // 3 - long_offset, rect[1] + self.FONT_SIZE // 5)
             cell = self.font.render(str(value), True, pygame.Color("black"))
             self.screen.blit(cell, location)
+
+        # Coordinates
+        if self.debug:
+            location = (rect[0] + self.FONT_SIZE // 10, rect[1] + self.FONT_SIZE // 12)
+            coords = self.font_small.render(f"{y},{x}", True, pygame.Color("red"))
+            self.screen.blit(coords, location)
 
         pygame.display.update(rect)
 
@@ -82,8 +94,13 @@ class Plotter():
             for y in range(height):
                 self.plot_cell(y, x, puzzle[y, x])
 
-    def handle_events(self, puzzle):
-        for ev in pygame.event.get():
+    def handle_events(self, puzzle, plot_wait=False):
+        """Handle pygame events. Optionally wait for input to continue plotting."""
+        waited_ev = []
+        if plot_wait:
+            waited_ev.append(pygame.event.wait())
+
+        for ev in waited_ev + pygame.event.get():
             if ev.type == pygame.QUIT:  # graceful quit
                 raise KeyboardInterrupt()
             elif ev.type == pygame.VIDEOEXPOSE:  # redraw on focus
@@ -91,17 +108,25 @@ class Plotter():
             elif ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_q:
                     raise KeyboardInterrupt()
+                elif ev.key == pygame.K_SPACE:
+                    return False
+            elif ev.type == pygame.MOUSEBUTTONDOWN:
+                return False
+
+        return plot_wait
 
 
 class Solver():
-    def __init__(self, puzzle, plotter=None):
+    def __init__(self, puzzle, plotter=None, verbose_from_step=np.inf):
         self.puzzle = puzzle
         self.plotter = plotter
+        self.verbose_from_step = verbose_from_step
 
         self.prepare()
 
     def prepare(self):
         self.solved = False
+        self.step = 0
         self.height, self.width = self.puzzle.shape
 
         # Verify puzzle input
@@ -118,21 +143,23 @@ class Solver():
         self.sea_size = self.width * self.height - np.sum(self.puzzle[self.puzzle > 0])
 
     def validate(self):
+        single_sea = len(self.seas) == 1
         full_sea = np.sum(self.puzzle[self.puzzle == State.SEA]) == self.sea_size
         no_unknowns = np.sum(self.puzzle[self.puzzle == State.UNKNOWN]) == 0
 
-        return full_sea and no_unknowns
+        return single_sea and full_sea and no_unknowns
 
     def set_cell(self, y, x, state):
         assert self.puzzle[y, x] <= 0, f"unable to change island center ({y}, {x})"
 
         if self.puzzle[y, x] != state:
             self.puzzle[y, x] = state
+            self.step += 1
 
             if self.plotter:
-                pygame.time.wait(PLOT_DELAY)
                 self.plotter.plot_cell(y, x, state)
-                self.plotter.handle_events(self.puzzle)
+                while self.plotter.handle_events(self.puzzle, plot_wait=self.step >= self.verbose_from_step):
+                    pass
 
     def four_way(self, y, x, state=None, func=None, check_state=State.UNKNOWN):
         """Perform four-way operation. Island check includes centers"""
@@ -181,6 +208,10 @@ class Solver():
             ny, nx = ways[0]
             self.set_cell(ny, nx, State.ISLAND)
             return ny, nx
+        else:
+            # Left with a lone island
+            self.islands[y, x] = []  # Add cell in walk_island()
+            return None
 
     def walk_island(self, y, x):
         """Walks island cells to center and adds the new cell"""
@@ -190,13 +221,18 @@ class Solver():
         walked = []  # Cells we walk over (may already be islands) to avoid walking backwards
         while (cy, cx) not in self.islands:
             walked.append((cy, cx))
+            logging.debug(f"Walk island ({cy}, {cx})")
 
             path = []
             self.four_way(cy, cx, None, lambda ny, nx: path.append((ny, nx)), check_state=State.ISLAND)
             path = [x for x in path if x not in walked]  # Remove already-walked cells
+            logging.debug(f"Walk island path: {path}")
 
             if len(path) == 0:
-                cy, cx = self.connect_to_island(cy, cx)
+                connection = self.connect_to_island(cy, cx)
+                if connection is None:
+                    break
+                cy, cx = connection
                 connect.append((cy, cx))
             else:
                 assert len(path) == 1, f"invalid island path ({cy}, {cx} = {path})"
@@ -216,13 +252,28 @@ class Solver():
                 for (cy, cx) in cells:
                     self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)))
 
-                # Fill if only one possible way (guaranteed correct)
                 if len(ways) == 1:
+                    # Island if only one possible way (guaranteed correct)
                     extended += 1
 
                     ny, nx = ways[0]
+                    logging.debug(f"Extended island {center} to ({ny}, {nx})")
                     self.set_cell(ny, nx, State.ISLAND)
                     self.islands[center].append((ny, nx))
+                elif len(ways) == 2 and left == 1:
+                    # Diagonal is Sea if island with remaining size 1 can only extend 2 ways
+                    (ny1, nx1), (ny2, nx2) = ways
+
+                    # Find same Unknown neighbour
+                    ways = [[], []]
+                    self.four_way(ny1, nx1, None, lambda ny, nx: ways[0].append((ny, nx)))
+                    self.four_way(ny2, nx2, None, lambda ny, nx: ways[1].append((ny, nx)))
+                    ways = list(set(ways[0]) & set(ways[1]))  # Same neighbour
+
+                    if len(ways) == 1:
+                        ny, nx = ways[0]
+                        logging.debug(f"Safed island {center} from ({ny}, {nx}) - diagonal sea")
+                        self.set_cell(ny, nx, State.SEA)
 
         return extended
 
@@ -235,6 +286,7 @@ class Solver():
 
                 for (cy, cx) in cells.copy():
                     seas = []
+                    logging.debug(f"Wrap full islands ({cy}, {cx})")
                     self.four_way(cy, cx, State.SEA, lambda ny, nx: seas.append((ny, nx)))
                     for sea in seas:
                         self.seas[sea] = [sea]
@@ -262,6 +314,7 @@ class Solver():
                             extended += 1
 
                             ny, nx = ways[0]
+                            logging.debug(f"Extend seas ({ny}, {nx})")
                             self.set_cell(ny, nx, State.SEA)
                             self.seas[y, x].append((ny, nx))
 
@@ -276,15 +329,17 @@ class Solver():
                     # Check reachability to all unfinished islands
                     reachable = False
                     for center, cells in self.islands.copy().items():
-                        size = self.puzzle[center] - len(cells)
+                        left = self.puzzle[center] - len(cells)
 
-                        # Calculate distance to island center
-                        distance = self.distance(center, (y, x))
-                        if distance <= size:
-                            reachable = True
-                            break
+                        # Calculate distance to each island cell
+                        for cell in cells:
+                            distance = self.distance(cell, (y, x))
+                            if distance <= left:
+                                reachable = True
+                                break
 
                     if not reachable:
+                        logging.debug(f"Unreachable ({y}, {x})")
                         self.set_cell(y, x, State.SEA)
                         self.seas[y, x] = [(y, x)]
                         unreachables += 1
@@ -319,11 +374,28 @@ class Solver():
 
         return prevented_pools
 
+    def merge_island_patches(self):
+        merged_islands = 0
+
+        for (cy, cx), cells in self.islands.copy().items():
+            if len(cells) == 1:
+                ways = []
+                self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)), check_state=State.ISLAND)
+                if len(ways) == 1:
+                    ny, nx = ways[0]
+                    ncenter = next((ncenter for ncenter, ncells in self.islands.items() if (ny, nx) in ncells), None)
+                    logging.debug(f"Merging ({cy}, {cx}) into {ncenter}")
+                    self.islands[ncenter].append((cy, cx))
+                    del self.islands[cy, cx]
+                    merged_islands += 1
+
+        return merged_islands
+
     def solve(self):
         assert not self.solved, "already solved"
 
-        self.islands = dict()  # (y, x): [coordinates]
-        self.seas = dict()  # (y, x): [coordinates]
+        self.islands = dict()  # (y, x): [coordinates] - Incomplete islands
+        self.seas = dict()  # (y, x): [coordinates] - Sea patches (final sea should have one big "patch")
 
         # First logical pass and data preparation
         for x in range(self.width):
@@ -369,12 +441,17 @@ class Solver():
         while True:
             # Only possible island extension (Island)
             extended_islands = self.extend_islands()
+            # TODO nikoli_2 - Extend (9, 5) to (6, 4) - 2 ways to extend, one would combine 2 islands
+            #               - Fill sea between 2 islands (only size > 1 to prevent wrapping unconnected island patches, 1s are done at the very start anyways)
+            #      nikoli_4 - Same as nikoli_2: (3, 7) and (3, 9)
+            # TODO nikoli_5 - Connect (4, 17) and (6, 17) - only 1 remaining cell, can't connect to anywhere else
 
             # Cells around full island (Sea)
             wrapped_islands = self.wrap_full_islands()
 
             # Connect alone Seas (Sea)
             extended_seas = self.extend_seas()
+            # TODO Extend sea patches
 
             # Out-of-range of any island (Sea)
             unreachables = self.unreachable_seas()
@@ -382,7 +459,10 @@ class Solver():
             # Prevent pools (square Sea) (at least one of four must be Island)
             prevented_pools = self.potential_pools()
 
-            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0 and unreachables == 0 and prevented_pools == 0:
+            # Merge island patches that were possibly left from unsuccessful island walk
+            merged_patches = self.merge_island_patches()
+
+            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0 and unreachables == 0 and prevented_pools == 0 and merged_patches == 0:
                 break
                 # TODO Guess & Backtrack
 
@@ -445,14 +525,20 @@ def main():
     parser = argparse.ArgumentParser(description="Nurikabe Solver")
     parser.add_argument("file", type=str, nargs="?", help="read puzzle from file (run tests if none)")
     parser.add_argument("--plot", "-p", action="store_true", help="plot solution (requires pygame)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="plot solving steps (requires pygame)")
+    parser.add_argument("--verbose", "-v", type=int, nargs="?", default=0, const=1,
+                        help="plot solving steps on mouse button or space key press (requires pygame)")
+    parser.add_argument("--debug", "-d", action="store_true", help="log debug steps and plot additional information (requires pygame)")
     args = parser.parse_args()
 
     if args.verbose:
         args.plot = True
 
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+
     # Run tests if no puzzle given
     if args.file is None:
+        logging.getLogger().setLevel(logging.ERROR)
         return unittest.main()
 
     # Read puzzle from file
@@ -464,15 +550,16 @@ def main():
     # Prepare plot
     plotter, verbose_plotter = None, None
     if args.plot:
-        plotter = Plotter(puzzle.shape)
+        plotter = Plotter(puzzle.shape, debug=args.debug)
         plotter.plot(puzzle)
 
         if args.verbose:
             verbose_plotter = plotter
+            logging.info("Press a mouse button or space key to solve in steps.")
 
     # Solve
-    print(f"Solving...\n{puzzle}")
-    solver = Solver(puzzle, plotter=verbose_plotter)
+    logging.info(f"Solving...\n{puzzle}")
+    solver = Solver(puzzle, plotter=verbose_plotter, verbose_from_step=args.verbose)
 
     try:
         start = time.process_time()  # ignore sleep (visualization)
@@ -485,11 +572,11 @@ def main():
     elapsed = (end - start) / 1000.0  # milliseconds
 
     if success:
-        print(f"Solved!\n{solver.puzzle}")
+        logging.info(f"Solved!\n{solver.puzzle}")
     else:
-        print("Unsolved!")
+        logging.info("Unsolved!")
 
-    print(f"Process Time: {elapsed} ms")
+    logging.info(f"Process Time: {elapsed} ms")
 
     # Plot solution
     if args.plot:
