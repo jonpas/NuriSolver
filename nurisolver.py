@@ -4,6 +4,7 @@ import argparse
 import sys
 import os
 import time
+import logging
 import unittest
 from enum import IntEnum
 from operator import itemgetter
@@ -11,7 +12,8 @@ from operator import itemgetter
 import numpy as np  # [y, x] or [height, width]
 
 
-PLOT_DELAY = 500  # milliseconds
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s",
+                    handlers=[logging.FileHandler("nurisolver.log", "w", encoding="utf-8"), logging.StreamHandler()])
 
 
 class State(IntEnum):
@@ -82,8 +84,13 @@ class Plotter():
             for y in range(height):
                 self.plot_cell(y, x, puzzle[y, x])
 
-    def handle_events(self, puzzle):
-        for ev in pygame.event.get():
+    def handle_events(self, puzzle, plot_wait=False):
+        """Handle pygame events. Optionally wait for input to continue plotting."""
+        waited_ev = []
+        if plot_wait:
+            waited_ev.append(pygame.event.wait())
+
+        for ev in waited_ev + pygame.event.get():
             if ev.type == pygame.QUIT:  # graceful quit
                 raise KeyboardInterrupt()
             elif ev.type == pygame.VIDEOEXPOSE:  # redraw on focus
@@ -91,17 +98,25 @@ class Plotter():
             elif ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_q:
                     raise KeyboardInterrupt()
+                elif ev.key == pygame.K_SPACE:
+                    return False
+            elif ev.type == pygame.MOUSEBUTTONDOWN:
+                return False
+
+        return plot_wait
 
 
 class Solver():
-    def __init__(self, puzzle, plotter=None):
+    def __init__(self, puzzle, plotter=None, verbose_from_step=np.inf):
         self.puzzle = puzzle
         self.plotter = plotter
+        self.verbose_from_step = verbose_from_step
 
         self.prepare()
 
     def prepare(self):
         self.solved = False
+        self.step = 0
         self.height, self.width = self.puzzle.shape
 
         # Verify puzzle input
@@ -128,11 +143,12 @@ class Solver():
 
         if self.puzzle[y, x] != state:
             self.puzzle[y, x] = state
+            self.step += 1
 
             if self.plotter:
-                pygame.time.wait(PLOT_DELAY)
                 self.plotter.plot_cell(y, x, state)
-                self.plotter.handle_events(self.puzzle)
+                while self.plotter.handle_events(self.puzzle, plot_wait=self.step >= self.verbose_from_step):
+                    pass
 
     def four_way(self, y, x, state=None, func=None, check_state=State.UNKNOWN):
         """Perform four-way operation. Island check includes centers"""
@@ -164,6 +180,7 @@ class Solver():
         return np.abs(y1 - y2) + np.abs(x1 - x2)
 
     def connect_to_island(self, y, x):
+        """Connects single Island cell to an Island. Does NOT update the islands map, use with walk_island() only!"""
         ways = []
         self.four_way(y, x, None, lambda ny, nx: ways.append((ny, nx)))
         if len(ways) == 1:
@@ -224,6 +241,7 @@ class Solver():
 
                 for (cy, cx) in cells.copy():
                     self.four_way(cy, cx, State.SEA)
+                    logging.debug(f"Wrap full islands ({cy}, {cx})")
 
                 # Cleanup full island from further processing
                 del self.islands[center]
@@ -248,6 +266,7 @@ class Solver():
                             extended += 1
 
                             ny, nx = ways[0]
+                            logging.debug(f"Extend seas ({ny}, {nx})")
                             self.set_cell(ny, nx, State.SEA)
 
         return extended
@@ -270,6 +289,7 @@ class Solver():
                             break
 
                     if not reachable:
+                        logging.debug(f"Unreachables ({y}, {x})")
                         self.set_cell(y, x, State.SEA)
                         unreachables += 1
 
@@ -347,9 +367,6 @@ class Solver():
 
             # Connect alone Seas (Sea)
             extended_seas = self.extend_seas()
-            # wiki-easy: bottom-left must connect one up
-            # wiki-hard: bottom-right (vertically between 5 and 2) must connect one left
-            # wiki-hard: middle (vertically between 2 and 3) must connect one left
 
             # Out-of-range of any island (Sea)
             unreachables = self.unreachable_seas()
@@ -417,14 +434,17 @@ def main():
     parser = argparse.ArgumentParser(description="Nurikabe Solver")
     parser.add_argument("file", type=str, nargs="?", help="read puzzle from file (run tests if none)")
     parser.add_argument("--plot", "-p", action="store_true", help="plot solution (requires pygame)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="plot solving steps (requires pygame)")
+    parser.add_argument("--verbose", "-v", type=int, nargs="?", default=0, const=1,
+                        help="plot solving steps on mouse button or space key press (requires pygame)")
     args = parser.parse_args()
 
     if args.verbose:
         args.plot = True
+        logging.getLogger().setLevel(logging.DEBUG)
 
     # Run tests if no puzzle given
     if args.file is None:
+        logging.getLogger().setLevel(logging.ERROR)
         return unittest.main()
 
     # Read puzzle from file
@@ -441,10 +461,11 @@ def main():
 
         if args.verbose:
             verbose_plotter = plotter
+            logging.info("Press a mouse button or space key to solve in steps.")
 
     # Solve
-    print(f"Solving...\n{puzzle}")
-    solver = Solver(puzzle, plotter=verbose_plotter)
+    logging.info(f"Solving...\n{puzzle}")
+    solver = Solver(puzzle, plotter=verbose_plotter, verbose_from_step=args.verbose)
 
     try:
         start = time.process_time()  # ignore sleep (visualization)
@@ -457,11 +478,11 @@ def main():
     elapsed = (end - start) / 1000.0  # milliseconds
 
     if success:
-        print(f"Solved!\n{solver.puzzle}")
+        logging.info(f"Solved!\n{solver.puzzle}")
     else:
-        print("Unsolved!")
+        logging.info("Unsolved!")
 
-    print(f"Process Time: {elapsed} ms")
+    logging.info(f"Process Time: {elapsed} ms")
 
     # Plot solution
     if args.plot:
