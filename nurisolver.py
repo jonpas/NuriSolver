@@ -196,6 +196,10 @@ class Solver():
             ny, nx = ways[0]
             self.set_cell(ny, nx, State.ISLAND)
             return ny, nx
+        else:
+            # Left with a lone island
+            self.islands[y, x] = []  # Add cell in walk_island()
+            return None
 
     def walk_island(self, y, x):
         """Walks island cells to center and adds the new cell"""
@@ -205,13 +209,18 @@ class Solver():
         walked = []  # Cells we walk over (may already be islands) to avoid walking backwards
         while (cy, cx) not in self.islands:
             walked.append((cy, cx))
+            logging.debug(f"Walk island ({cy}, {cx})")
 
             path = []
             self.four_way(cy, cx, None, lambda ny, nx: path.append((ny, nx)), check_state=State.ISLAND)
             path = [x for x in path if x not in walked]  # Remove already-walked cells
+            logging.debug(f"Walk island path: {path}")
 
             if len(path) == 0:
-                cy, cx = self.connect_to_island(cy, cx)
+                connection = self.connect_to_island(cy, cx)
+                if connection is None:
+                    break
+                cy, cx = connection
                 connect.append((cy, cx))
             else:
                 assert len(path) == 1, f"invalid island path ({cy}, {cx} = {path})"
@@ -236,6 +245,7 @@ class Solver():
                     extended += 1
 
                     ny, nx = ways[0]
+                    logging.debug(f"Extended island {center} to ({ny}, {nx})")
                     self.set_cell(ny, nx, State.ISLAND)
                     self.islands[center].append((ny, nx))
 
@@ -249,8 +259,8 @@ class Solver():
                 wrapped += 1
 
                 for (cy, cx) in cells.copy():
-                    self.four_way(cy, cx, State.SEA)
                     logging.debug(f"Wrap full islands ({cy}, {cx})")
+                    self.four_way(cy, cx, State.SEA)
 
                 # Cleanup full island from further processing
                 del self.islands[center]
@@ -289,17 +299,17 @@ class Solver():
                     # Check reachability to all unfinished islands
                     reachable = False
                     for center, cells in self.islands.copy().items():
-                        size = self.puzzle[center] - len(cells)
+                        left = self.puzzle[center] - len(cells)
 
                         # Calculate distance to each island cell
                         for cell in cells:
                             distance = self.distance(cell, (y, x))
-                            if distance <= size:
+                            if distance <= left:
                                 reachable = True
                                 break
 
                     if not reachable:
-                        logging.debug(f"Unreachables ({y}, {x})")
+                        logging.debug(f"Unreachable ({y}, {x})")
                         self.set_cell(y, x, State.SEA)
                         unreachables += 1
 
@@ -333,10 +343,27 @@ class Solver():
 
         return prevented_pools
 
+    def merge_island_patches(self):
+        merged_islands = 0
+
+        for (cy, cx), cells in self.islands.copy().items():
+            if len(cells) == 1:
+                ways = []
+                self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)), check_state=State.ISLAND)
+                if len(ways) == 1:
+                    ny, nx = ways[0]
+                    ncenter = next((ncenter for ncenter, ncells in self.islands.items() if (ny, nx) in ncells), None)
+                    logging.debug(f"Merging ({cy}, {cx}) into {ncenter}")
+                    self.islands[ncenter].append((cy, cx))
+                    del self.islands[cy, cx]
+                    merged_islands += 1
+
+        return merged_islands
+
     def solve(self):
         assert not self.solved, "already solved"
 
-        self.islands = dict()  # (y, x): [coordinates]
+        self.islands = dict()  # (y, x): [coordinates] - Incomplete islands
 
         # First logical pass and data preparation
         for x in range(self.width):
@@ -371,6 +398,8 @@ class Solver():
         while True:
             # Only possible island extension (Island)
             extended_islands = self.extend_islands()
+            # TODO nikoli_2 - Extend (9, 5) to (6, 4) - 2 ways to extend, one would combine 2 islands
+            #               - Fill sea between 2 islands (only size > 1 to prevent wrapping unconnected island patches, 1s are done at the very start anyways)
 
             # Cells around full island (Sea)
             wrapped_islands = self.wrap_full_islands()
@@ -384,7 +413,10 @@ class Solver():
             # Prevent pools (square Sea) (at least one of four must be Island)
             prevented_pools = self.potential_pools()
 
-            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0 and unreachables == 0 and prevented_pools == 0:
+            # Merge island patches that were possibly left from unsuccessful island walk
+            merged_patches = self.merge_island_patches()
+
+            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0 and unreachables == 0 and prevented_pools == 0 and merged_patches == 0:
                 break
                 # TODO Guess & Backtrack
 
