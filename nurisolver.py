@@ -31,9 +31,10 @@ class Plotter():
     FONT_SIZE = 50
     LINE_WIDTH = 2
 
-    def __init__(self, shape):
+    def __init__(self, shape, debug=False):
         self.shape = shape  # (height, width)
         height, width = self.shape
+        self.debug = debug
 
         global pygame
         import pygame
@@ -44,6 +45,7 @@ class Plotter():
 
         pygame.display.set_caption("NuriSolver")
         self.font = pygame.font.Font(None, self.FONT_SIZE)
+        self.font_small = pygame.font.Font(None, self.FONT_SIZE // 3)
         self.screen.fill(pygame.Color("white"))
 
         # Grid
@@ -62,6 +64,7 @@ class Plotter():
     def plot_cell(self, y, x, value):
         rect = (x * self.FONT_SIZE, y * self.FONT_SIZE, self.FONT_SIZE, self.FONT_SIZE)
 
+        # Type
         if value == State.SEA:
             self.screen.fill(pygame.Color("black"), rect)
         elif value == State.ISLAND:
@@ -72,6 +75,12 @@ class Plotter():
             location = (rect[0] + self.FONT_SIZE // 3, rect[1] + self.FONT_SIZE // 5)
             cell = self.font.render(str(value), True, pygame.Color("black"))
             self.screen.blit(cell, location)
+
+        # Coordinates
+        if self.debug:
+            location = (rect[0] + self.FONT_SIZE // 10, rect[1] + self.FONT_SIZE // 12)
+            coords = self.font_small.render(f"{y},{x}", True, pygame.Color("red"))
+            self.screen.blit(coords, location)
 
         pygame.display.update(rect)
 
@@ -282,11 +291,12 @@ class Solver():
                     for center, cells in self.islands.copy().items():
                         size = self.puzzle[center] - len(cells)
 
-                        # Calculate distance to island center
-                        distance = self.distance(center, (y, x))
-                        if distance <= size:
-                            reachable = True
-                            break
+                        # Calculate distance to each island cell
+                        for cell in cells:
+                            distance = self.distance(cell, (y, x))
+                            if distance <= size:
+                                reachable = True
+                                break
 
                     if not reachable:
                         logging.debug(f"Unreachables ({y}, {x})")
@@ -436,10 +446,13 @@ def main():
     parser.add_argument("--plot", "-p", action="store_true", help="plot solution (requires pygame)")
     parser.add_argument("--verbose", "-v", type=int, nargs="?", default=0, const=1,
                         help="plot solving steps on mouse button or space key press (requires pygame)")
+    parser.add_argument("--debug", "-d", action="store_true", help="log debug steps and plot additional information (requires pygame)")
     args = parser.parse_args()
 
     if args.verbose:
         args.plot = True
+
+    if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
     # Run tests if no puzzle given
@@ -456,7 +469,7 @@ def main():
     # Prepare plot
     plotter, verbose_plotter = None, None
     if args.plot:
-        plotter = Plotter(puzzle.shape)
+        plotter = Plotter(puzzle.shape, debug=args.debug)
         plotter.plot(puzzle)
 
         if args.verbose:
