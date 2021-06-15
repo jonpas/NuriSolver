@@ -150,7 +150,7 @@ class Solver():
         logging.debug(f"{single_sea=}, {full_sea=}, {no_unknowns=}")
         return single_sea and full_sea and no_unknowns
 
-    def set_cell(self, y, x, state):
+    def set_cell(self, y, x, state, center=None):
         assert self.puzzle[y, x] <= 0, f"unable to change island center ({y}, {x})"
 
         if self.puzzle[y, x] != state:
@@ -163,8 +163,14 @@ class Solver():
                     pass
 
         # Tracking
-        if state == State.SEA:
-            self.seas[y, x] = [(y, x)]
+        if center is not None:
+            if state == State.SEA:
+                if self.seas.get(center, None) is None:
+                    self.seas[center] = [(y, x)]
+                elif (y, x) not in self.seas[center]:
+                    self.seas[center].append((y, x))
+            elif state == State.ISLAND:
+                self.islands[center].append((y, x))
 
     def four_way(self, y, x, state=None, func=None, check_state=State.UNKNOWN):
         """Perform four-way operation. Island check includes centers"""
@@ -172,22 +178,22 @@ class Solver():
             if func:
                 func(y - 1, x)
             if state:
-                self.set_cell(y - 1, x, state)
+                self.set_cell(y - 1, x, state, center=(y - 1, x))
         if y < self.height - 1 and min(self.puzzle[y + 1, x], 0) == check_state:
             if func:
                 func(y + 1, x)
             if state:
-                self.set_cell(y + 1, x, state)
+                self.set_cell(y + 1, x, state, center=(y + 1, x))
         if x > 0 and min(self.puzzle[y, x - 1], 0) == check_state:
             if func:
                 func(y, x - 1)
             if state:
-                self.set_cell(y, x - 1, state)
+                self.set_cell(y, x - 1, state, center=(y, x - 1))
         if x < self.width - 1 and min(self.puzzle[y, x + 1], 0) == check_state:
             if func:
                 func(y, x + 1)
             if state:
-                self.set_cell(y, x + 1, state)
+                self.set_cell(y, x + 1, state, center=(y, x + 1))
 
     @classmethod
     def distance(cls, cell1, cell2):
@@ -250,8 +256,7 @@ class Solver():
             # Expand sea to potential blocks as it has to be expanded to prevent cutoff
             for (by, bx) in imagine_blocks:
                 logging.debug(f"{self.step}: Safed sea {center} from cutoff by adding ({by}, {bx})")
-                self.set_cell(by, bx, State.SEA)
-                self.seas[center].append((by, bx))
+                self.set_cell(by, bx, State.SEA, center=center)
 
             return True
         return False
@@ -272,8 +277,7 @@ class Solver():
                     # Island if only one possible way (guaranteed correct)
                     ny, nx = ways[0]
                     logging.debug(f"{self.step}: Extended island {center} to ({ny}, {nx})")
-                    self.set_cell(ny, nx, State.ISLAND)
-                    self.islands[center].append((ny, nx))
+                    self.set_cell(ny, nx, State.ISLAND, center=center)
                     extended += 1
                 elif len(ways) == 2:
                     if left == 1:
@@ -289,7 +293,7 @@ class Solver():
                         if len(ways) == 1:
                             ny, nx = ways[0]
                             logging.debug(f"{self.step}: Safed island {center} from ({ny}, {nx}) - diagonal sea")
-                            self.set_cell(ny, nx, State.SEA)
+                            self.set_cell(ny, nx, State.SEA, center=(ny, nx))
                     else:
                         # Can only go one way if the other would block a sea patch, as well as only expand sea patch into the potentially blocked way
                         cutoff = False
@@ -307,8 +311,7 @@ class Solver():
                         if cutoff:
                             ny, nx = ways[1] if i == 0 else ways[0]
                             logging.debug(f"{self.step}: Extended island {center} to ({ny}, {nx})")
-                            self.set_cell(ny, nx, State.ISLAND)
-                            self.islands[center].append((ny, nx))
+                            self.set_cell(ny, nx, State.ISLAND, center=center)
                             extended += 1
 
         return extended
@@ -347,9 +350,9 @@ class Solver():
                     for (iy, ix) in islands:
                         # Find island center from found cell
                         icenter = next((icenter for icenter, icells in self.islands.items() if (iy, ix) in icells), None)
-                        if self.puzzle[icenter] > 0:  # Only compare to proper islands and not single patches waiting for merging
+                        if self.puzzle[center] > 0 and self.puzzle[icenter] > 0:  # Only compare to proper islands and not single patches waiting for merging
                             logging.debug(f"{self.step}: Bridging sea between islands {center} and {icenter}")
-                            self.set_cell(wy, wx, State.SEA)
+                            self.set_cell(wy, wx, State.SEA, center=(wy, wx))
 
         return bridged
 
@@ -367,8 +370,11 @@ class Solver():
                 # Sea if only one possible way (guaranteed correct)
                 ny, nx = ways[0]
                 logging.debug(f"{self.step}: Extended sea {center} to ({ny}, {nx})")
-                self.set_cell(ny, nx, State.SEA)
+                self.set_cell(ny, nx, State.SEA, center=center)
                 extended += 1
+
+                # Force merge sea patches to prevent over-extension
+                self.merge_sea_patches()
 
         return extended
 
@@ -392,7 +398,7 @@ class Solver():
 
                     if not reachable:
                         logging.debug(f"{self.step}: Unreachable ({y}, {x})")
-                        self.set_cell(y, x, State.SEA)
+                        self.set_cell(y, x, State.SEA, center=(y, x))
                         unreachables += 1
 
         return unreachables
@@ -487,19 +493,19 @@ class Solver():
                 if 0 < x < self.width - 1 and 0 < y < self.height - 1 and self.puzzle[y, x] > 0:
                     # Only check up-left and up-right (down-left and down-right are just mirrored)
                     if self.puzzle[y - 1, x - 1] > 0:
-                        self.set_cell(y - 1, x, State.SEA)
-                        self.set_cell(y, x - 1, State.SEA)
+                        self.set_cell(y - 1, x, State.SEA, center=(y - 1, x))
+                        self.set_cell(y, x - 1, State.SEA, center=(y, x - 1))
                     elif self.puzzle[y + 1, x - 1] > 0:
-                        self.set_cell(y + 1, x, State.SEA)
-                        self.set_cell(y, x - 1, State.SEA)
+                        self.set_cell(y + 1, x, State.SEA, center=(y + 1, x))
+                        self.set_cell(y, x - 1, State.SEA, center=(y, x - 1))
 
                 # Sea between horizontal/vertical island centers (Sea)
                 if x < self.width - 2:
                     if self.puzzle[y, x] > 0 and self.puzzle[y, x + 2] > 0:
-                        self.set_cell(y, x + 1, State.SEA)
+                        self.set_cell(y, x + 1, State.SEA, center=(y, x + 1))
                 if y < self.height - 2:
                     if self.puzzle[y, x] > 0 and self.puzzle[y + 2, x] > 0:
-                        self.set_cell(y + 1, x, State.SEA)
+                        self.set_cell(y + 1, x, State.SEA, center=(y + 1, x))
 
                 # Neighbours of '1' island (Sea)
                 if self.puzzle[y, x] == 1:
@@ -511,6 +517,7 @@ class Solver():
             logging.debug(f"Extending islands ({self.step})")
             extended_islands = self.extend_islands()
             # TODO nikoli_5 - Connect (4, 17) and (6, 17) - only 1 remaining cell, can't connect to anywhere else
+            #               - Connect (2, 3) and (1, 3) - same as above
 
             # Cells around full island (Sea)
             logging.debug(f"Wrapping full islands ({self.step})")
