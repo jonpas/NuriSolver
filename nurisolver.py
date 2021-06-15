@@ -306,6 +306,8 @@ class Solver():
                                 if self.is_sea_cutoff(sy, sx, imagine_blocks=[(ny, nx)]):
                                     cutoff = True
                                     break
+                            if cutoff:
+                                break
 
                         # If any cutoff, we must go the other way
                         if cutoff:
@@ -375,6 +377,10 @@ class Solver():
 
                 # Force merge sea patches to prevent over-extension
                 self.merge_sea_patches()
+
+                # Recursively call extend so we re-read self.seas with merged patches to avoid doubling seas
+                self.extend_seas()
+                break
 
         return extended
 
