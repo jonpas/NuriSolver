@@ -248,7 +248,6 @@ class Solver():
         if len(ways) == 0:
             # Expand sea to potential blocks as it has to be expanded to prevent cutoff
             for (by, bx) in imagine_blocks:
-                print(self.seas)
                 logging.debug(f"{self.step}: Safed sea {center} from cutoff by adding ({by}, {bx})")
                 self.set_cell(by, bx, State.SEA)
                 self.seas[center].append((by, bx))
@@ -292,27 +291,24 @@ class Solver():
                             self.set_cell(ny, nx, State.SEA)
                     else:
                         # Can only go one way if the other would block a sea patch, as well as only expand sea patch into the potentially blocked way
-                        if center == (0, 0):  # TODO Remove check
-                            print("hahaaaa")
-                            cutoff = False
-                            for i, (ny, nx) in enumerate(ways):
-                                # Pretend we continue island on one way
-                                # Find neighbouring seas and check if any would be cutoff
-                                seas = []
-                                self.four_way(ny, nx, None, lambda ny, nx: seas.append((ny, nx)), check_state=State.SEA)
-                                for (sy, sx) in seas:
-                                    print(sy, sx)
-                                    if self.is_sea_cutoff(sy, sx, imagine_blocks=[(ny, nx)]):
-                                        cutoff = True
-                                        break
+                        cutoff = False
+                        for i, (ny, nx) in enumerate(ways):
+                            # Pretend we continue island on one way
+                            # Find neighbouring seas and check if any would be cutoff
+                            seas = []
+                            self.four_way(ny, nx, None, lambda ny, nx: seas.append((ny, nx)), check_state=State.SEA)
+                            for (sy, sx) in seas:
+                                if self.is_sea_cutoff(sy, sx, imagine_blocks=[(ny, nx)]):
+                                    cutoff = True
+                                    break
 
-                            # If any cutoff, we must go the other way
-                            if cutoff:
-                                ny, nx = ways[1] if i == 0 else ways[0]
-                                logging.debug(f"{self.step}: Extended island {center} to ({ny}, {nx})")
-                                self.set_cell(ny, nx, State.ISLAND)
-                                self.islands[center].append((ny, nx))
-                                extended += 1
+                        # If any cutoff, we must go the other way
+                        if cutoff:
+                            ny, nx = ways[1] if i == 0 else ways[0]
+                            logging.debug(f"{self.step}: Extended island {center} to ({ny}, {nx})")
+                            self.set_cell(ny, nx, State.ISLAND)
+                            self.islands[center].append((ny, nx))
+                            extended += 1
 
         return extended
 
@@ -333,25 +329,21 @@ class Solver():
         return wrapped
 
     def extend_seas(self):
-        # TODO Check Sea patch for connections
         extended = 0
 
-        for x in range(self.width):
-            for y in range(self.height):
-                if self.puzzle[y, x] == State.SEA:
-                    neighbour_seas = []
-                    self.four_way(y, x, None, lambda ny, nx: neighbour_seas.append((ny, nx)), check_state=State.SEA)
+        for center, cells in self.seas.copy().items():
+            ways = []
 
-                    if len(neighbour_seas) == 0:
-                        ways = []
-                        self.four_way(y, x, None, lambda ny, nx: ways.append((ny, nx)))
+            # Check if any cell can extend any single way
+            for (cy, cx) in cells:
+                self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)))
 
-                        if len(ways) == 1:
-                            extended += 1
-
-                            ny, nx = ways[0]
-                            logging.debug(f"{self.step}: Extend seas ({ny}, {nx})")
-                            self.set_cell(ny, nx, State.SEA)
+            if len(ways) == 1:
+                # Sea if only one possible way (guaranteed correct)
+                ny, nx = ways[0]
+                logging.debug(f"{self.step}: Extended sea {center} to ({ny}, {nx})")
+                self.set_cell(ny, nx, State.SEA)
+                extended += 1
 
         return extended
 
@@ -501,11 +493,6 @@ class Solver():
             logging.debug(f"Wrapping full islands ({self.step})")
             wrapped_islands = self.wrap_full_islands()
 
-            # Connect alone Seas (Sea)
-            logging.debug(f"Extending seas ({self.step})")
-            extended_seas = self.extend_seas()
-            # TODO Extend sea patches
-
             # Out-of-range of any island (Sea)
             logging.debug(f"Searching for unreachable seas ({self.step})")
             unreachables = self.unreachable_seas()
@@ -522,13 +509,17 @@ class Solver():
             logging.debug(f"Merging sea patches ({self.step})")
             merged_seas = self.merge_sea_patches()
 
+            # Extend seas (after merging sea patches to prevent over-extending)
+            logging.debug(f"Extending seas ({self.step})")
+            extended_seas = self.extend_seas()
+
             if (extended_islands == 0
                     and wrapped_islands == 0
-                    and extended_seas == 0
                     and unreachables == 0
                     and prevented_pools == 0
                     and merged_patches == 0
-                    and merged_seas == 0):
+                    and merged_seas == 0
+                    and extended_seas == 0):
                 break
                 # TODO Guess & Backtrack
 

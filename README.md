@@ -2,7 +2,7 @@
 
 [Nurikabe](https://en.wikipedia.org/wiki/Nurikabe_(puzzle)) puzzle solver at Optimization Methods (slo. Optimizacijske Metode). 
 
-Solves any-size Nurikabe using a series of simple procedures and rules.
+Solves any-size Nurikabe using a series of logical procedures and rules. Harder puzzles use guess and backtrack in addition to logical solving steps.
 
 
 ## Usage
