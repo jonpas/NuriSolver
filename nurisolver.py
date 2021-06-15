@@ -4,6 +4,7 @@ import argparse
 import sys
 import os
 import time
+import unittest
 from enum import IntEnum
 
 import numpy as np  # [y, x] or [height, width]
@@ -154,11 +155,17 @@ class Solver():
             if state:
                 self.set_cell(y, x + 1, state)
 
+    @classmethod
+    def distance(cls, cell1, cell2):
+        """Calculates Manhattan distance between 2 cells."""
+        (y1, x1), (y2, x2) = cell1, cell2
+        return np.abs(y1 - y2) + np.abs(x1 - x2)
+
     def extend_islands(self):
         extended = 0
 
-        for (y, x), cells in self.islands.copy().items():
-            left = self.puzzle[y, x] - len(cells)
+        for center, cells in self.islands.copy().items():
+            left = self.puzzle[center] - len(cells)
             if left > 0:
                 ways = []
 
@@ -172,7 +179,7 @@ class Solver():
 
                     ny, nx = ways[0]
                     self.set_cell(ny, nx, State.ISLAND)
-                    self.islands[y, x].append((ny, nx))
+                    self.islands[center].append((ny, nx))
 
         return extended
 
@@ -212,6 +219,28 @@ class Solver():
                             self.set_cell(ny, nx, State.SEA)
 
         return extended
+
+    def unreachable_seas(self):
+        unreachables = 0
+
+        for x in range(self.width):
+            for y in range(self.height):
+                if self.puzzle[y, x] == State.UNKNOWN:
+                    # Check reachability to all unfinished islands
+                    reachable = False
+                    for center in self.islands.copy():
+                        size = self.puzzle[center]
+                        # Calculate distance to island center
+                        distance = self.distance(center, (y, x))
+                        if distance < size:
+                            reachable = True
+                            break
+
+                    if not reachable:
+                        self.set_cell(y, x, State.SEA)
+                        unreachables += 1
+
+        return unreachables
 
     def solve(self):
         assert not self.solved, "already solved"
@@ -261,10 +290,14 @@ class Solver():
             # wiki-hard: bottom-right (vertically between 5 and 2) must connect one left
             # wiki-hard: middle (vertically between 2 and 3) must connect one left
 
-            # TODO Out-of-range of any island (Sea) - Expensive
+            # Out-of-range of any island (Sea)
+            unreachables = self.unreachable_seas()
 
-            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0:
+            # TODO L Sea (4th must be Island)
+
+            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0 and unreachables == 0:
                 break
+                # TODO Guess & Backtrack
 
         if self.validate():
             self.solved = True
@@ -272,42 +305,49 @@ class Solver():
         return self.solved
 
 
-def test():
-    test_folder = "test"
-    solved_suffix = "-solved"
+# Tests
+class TestSolver(unittest.TestCase):
+    def test_distance_simple(self):
+        distance = Solver.distance((0, 0), (2, 2))
+        self.assertEqual(distance, 4)
 
-    print("--- TEST START ---")
-    errors, warnings = 0, 0
+    def test_distance_hard(self):
+        distance = Solver.distance((5, 2), (1, 6))
+        self.assertEqual(distance, 8)
 
-    for file in os.listdir(test_folder):
-        name, ext = os.path.splitext(file)
-        if not name.endswith(solved_suffix):
-            print(f"{file}...", end="")
-            puzzle = load(os.path.join(test_folder, file))
-            solution_file = os.path.join(test_folder, f"{name}{solved_suffix}{ext}")
+    def test_solver(self):
+        test_folder = "test"
+        solved_suffix = "-solved"
 
-            if os.path.exists(solution_file):
-                solution = load(solution_file, dot_value=State.SEA)
+        print("\n--- SOLVER START ---")
+        errors, warnings = 0, 0
+        for file in os.listdir(test_folder):
+            name, ext = os.path.splitext(file)
+            if not name.endswith(solved_suffix):
+                print(f"{file}...", end="")
+                puzzle = load(os.path.join(test_folder, file))
+                solution_file = os.path.join(test_folder, f"{name}{solved_suffix}{ext}")
 
-                solver = Solver(puzzle)
-                success = solver.solve()
-                if success and np.array_equal(solver.puzzle, solution):
-                    print(" OK")
+                if os.path.exists(solution_file):
+                    solution = load(solution_file, dot_value=State.SEA)
+
+                    solver = Solver(puzzle)
+                    success = solver.solve()
+                    if success and np.array_equal(solver.puzzle, solution):
+                        print(" OK")
+                    else:
+                        print(f" ERROR\n{solver.puzzle}")
+                        errors += 1
                 else:
-                    print(f" ERROR\n{solver.puzzle}")
-                    errors += 1
-            else:
-                print(" NOT FOUND")
-                warnings += 1
+                    print(" NOT FOUND")
+                    warnings += 1
 
-    if errors:
-        print("--- TEST FAIL ---")
-    elif warnings:
-        print("--- TEST WARN ---")
-    else:
-        print("--- TEST SUCCESS ---")
-
-    return errors
+        if errors:
+            print("--- SOLVER FAIL ---")
+        elif warnings:
+            print("--- SOLVER WARN ---")
+        else:
+            print("--- SOLVER SUCCESS ---")
 
 
 def main():
@@ -323,7 +363,7 @@ def main():
 
     # Run tests if no puzzle given
     if args.file is None:
-        return test()
+        return unittest.main()
 
     # Read puzzle from file
     if not os.path.exists(args.file):
