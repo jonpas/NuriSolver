@@ -6,6 +6,7 @@ import os
 import time
 import unittest
 from enum import IntEnum
+from operator import itemgetter
 
 import numpy as np  # [y, x] or [height, width]
 
@@ -134,22 +135,23 @@ class Solver():
                 self.plotter.handle_events(self.puzzle)
 
     def four_way(self, y, x, state=None, func=None, check_state=State.UNKNOWN):
-        if y > 0 and self.puzzle[y - 1, x] == check_state:
+        """Perform four-way operation. Island check includes centers"""
+        if y > 0 and min(self.puzzle[y - 1, x], 0) == check_state:
             if func:
                 func(y - 1, x)
             if state:
                 self.set_cell(y - 1, x, state)
-        if y < self.height - 1 and self.puzzle[y + 1, x] == check_state:
+        if y < self.height - 1 and min(self.puzzle[y + 1, x], 0) == check_state:
             if func:
                 func(y + 1, x)
             if state:
                 self.set_cell(y + 1, x, state)
-        if x > 0 and self.puzzle[y, x - 1] == check_state:
+        if x > 0 and min(self.puzzle[y, x - 1], 0) == check_state:
             if func:
                 func(y, x - 1)
             if state:
                 self.set_cell(y, x - 1, state)
-        if x < self.width - 1 and self.puzzle[y, x + 1] == check_state:
+        if x < self.width - 1 and min(self.puzzle[y, x + 1], 0) == check_state:
             if func:
                 func(y, x + 1)
             if state:
@@ -160,6 +162,18 @@ class Solver():
         """Calculates Manhattan distance between 2 cells."""
         (y1, x1), (y2, x2) = cell1, cell2
         return np.abs(y1 - y2) + np.abs(x1 - x2)
+
+    def walk_island(self, y, x):
+        """Walks island cells to center and adds the new cell"""
+        cy, cx = y, x
+        while (cy, cx) not in self.islands:
+            path = []
+            self.four_way(cy, cx, None, lambda ny, nx: path.append((ny, nx)), check_state=State.ISLAND)
+            print(path)
+            assert len(path) == 1, f"invalid island path, multiple islands connected ({cy}, {cx})"
+            cy, cx = path[0]
+
+        self.islands[cy, cx].append((y, x))
 
     def extend_islands(self):
         extended = 0
@@ -242,6 +256,34 @@ class Solver():
 
         return unreachables
 
+    def potential_pools(self):
+        prevented_pools = 0
+
+        for x in range(self.width - 1):
+            for y in range(self.height - 1):
+                c1, c2, c3, c4 = (y, x), (y, x + 1), (y + 1, x), (y + 1, x + 1)
+
+                pool = [
+                    [c1, self.puzzle[c1]],
+                    [c2, self.puzzle[c2]],
+                    [c3, self.puzzle[c3]],
+                    [c4, self.puzzle[c4]],
+                ]
+                pool.sort(key=itemgetter(1))  # Assuming State.UNKNOWN < State.SEA
+
+                if (pool[0][1] == State.UNKNOWN and pool[1][1] == State.SEA and pool[2][1] == State.SEA and pool[3][1] == State.SEA):
+                    # 3 Seas, 1 Unknown = Must be island
+                    cy, cx = pool[0][0]
+                    self.set_cell(cy, cx, State.ISLAND)
+                    self.walk_island(cy, cx)
+                    prevented_pools += 1
+                elif (pool[0][1] == State.UNKNOWN and pool[1][1] == State.UNKNOWN and pool[2][1] == State.SEA and pool[3][1] == State.SEA):
+                    # 2 Seas, 2 Unknowns = At least one of them must be Island
+                    # TODO Find which of the 2 unknowns can be Island
+                    pass
+
+        return prevented_pools
+
     def solve(self):
         assert not self.solved, "already solved"
 
@@ -293,9 +335,10 @@ class Solver():
             # Out-of-range of any island (Sea)
             unreachables = self.unreachable_seas()
 
-            # TODO L Sea (4th must be Island)
+            # Prevent pools (square Sea) (at least one of four must be Island)
+            prevented_pools = self.potential_pools()
 
-            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0 and unreachables == 0:
+            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0 and unreachables == 0 and prevented_pools == 0:
                 break
                 # TODO Guess & Backtrack
 
