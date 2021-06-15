@@ -163,7 +163,18 @@ class Solver():
         (y1, x1), (y2, x2) = cell1, cell2
         return np.abs(y1 - y2) + np.abs(x1 - x2)
 
+    def merge_seas(self):
+        for center, cells in self.seas.copy().items():
+            #print(self.seas)
+            for scenter, scells in self.seas.copy().items():
+                if center != scenter and center in scells:
+                    self.seas[scenter].extend(cells)
+                    self.seas[scenter] = list(dict.fromkeys(self.seas[scenter]))  # Remove duplicates TODO Needed?
+                    del self.seas[center]
+                    break
+
     def connect_to_island(self, y, x):
+        """Connects single Island cell to an Island. Does NOT update the islands map, use with walk_island() only!"""
         ways = []
         self.four_way(y, x, None, lambda ny, nx: ways.append((ny, nx)))
         if len(ways) == 1:
@@ -223,7 +234,10 @@ class Solver():
                 wrapped += 1
 
                 for (cy, cx) in cells.copy():
-                    self.four_way(cy, cx, State.SEA)
+                    seas = []
+                    self.four_way(cy, cx, State.SEA, lambda ny, nx: seas.append((ny, nx)))
+                    for sea in seas:
+                        self.seas[sea] = [sea]
 
                 # Cleanup full island from further processing
                 del self.islands[center]
@@ -249,6 +263,7 @@ class Solver():
 
                             ny, nx = ways[0]
                             self.set_cell(ny, nx, State.SEA)
+                            self.seas[y, x].append((ny, nx))
 
         return extended
 
@@ -271,6 +286,7 @@ class Solver():
 
                     if not reachable:
                         self.set_cell(y, x, State.SEA)
+                        self.seas[y, x] = [(y, x)]
                         unreachables += 1
 
         return unreachables
@@ -307,6 +323,7 @@ class Solver():
         assert not self.solved, "already solved"
 
         self.islands = dict()  # (y, x): [coordinates]
+        self.seas = dict()  # (y, x): [coordinates]
 
         # First logical pass and data preparation
         for x in range(self.width):
@@ -321,21 +338,32 @@ class Solver():
                     if self.puzzle[y - 1, x - 1] > 0:
                         self.set_cell(y - 1, x, State.SEA)
                         self.set_cell(y, x - 1, State.SEA)
+                        self.seas[y - 1, x] = [(y - 1, x), (y, x - 1)]
+                        #self.seas[y - 1, x] = [(y - 1, x)]
+                        #self.seas[y, x - 1] = [(y, x - 1)]
                     elif self.puzzle[y + 1, x - 1] > 0:
                         self.set_cell(y + 1, x, State.SEA)
                         self.set_cell(y, x - 1, State.SEA)
+                        self.seas[y + 1, x] = [(y + 1, x), (y, x - 1)]
+                        #self.seas[y + 1, x] = [(y + 1, x)]
+                        #self.seas[y, x - 1] = [(y, x - 1)]
 
                 # Sea between horizontal/vertical island centers (Sea)
                 if x < self.width - 2:
                     if self.puzzle[y, x] > 0 and self.puzzle[y, x + 2] > 0:
                         self.set_cell(y, x + 1, State.SEA)
+                        self.seas[y, x + 1] = [(y, x + 1)]
                 if y < self.height - 2:
                     if self.puzzle[y, x] > 0 and self.puzzle[y + 2, x] > 0:
                         self.set_cell(y + 1, x, State.SEA)
+                        self.seas[y + 1, x] = [(y + 1, x)]
 
                 # Neighbours of '1' island (Sea)
                 if self.puzzle[y, x] == 1:
-                    self.four_way(y, x, State.SEA)
+                    seas = []
+                    self.four_way(y, x, State.SEA, lambda ny, nx: seas.append((ny, nx)))
+                    for sea in seas:
+                        self.seas[sea] = [sea]
 
         # Continue logical solving steps
         while True:
@@ -347,9 +375,6 @@ class Solver():
 
             # Connect alone Seas (Sea)
             extended_seas = self.extend_seas()
-            # wiki-easy: bottom-left must connect one up
-            # wiki-hard: bottom-right (vertically between 5 and 2) must connect one left
-            # wiki-hard: middle (vertically between 2 and 3) must connect one left
 
             # Out-of-range of any island (Sea)
             unreachables = self.unreachable_seas()
@@ -360,6 +385,9 @@ class Solver():
             if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0 and unreachables == 0 and prevented_pools == 0:
                 break
                 # TODO Guess & Backtrack
+
+        self.merge_seas()
+        print(self.seas)
 
         if self.validate():
             self.solved = True
