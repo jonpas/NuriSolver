@@ -163,17 +163,35 @@ class Solver():
         (y1, x1), (y2, x2) = cell1, cell2
         return np.abs(y1 - y2) + np.abs(x1 - x2)
 
+    def connect_to_island(self, y, x):
+        ways = []
+        self.four_way(y, x, None, lambda ny, nx: ways.append((ny, nx)))
+        if len(ways) == 1:
+            ny, nx = ways[0]
+            self.set_cell(ny, nx, State.ISLAND)
+            return ny, nx
+
     def walk_island(self, y, x):
         """Walks island cells to center and adds the new cell"""
         cy, cx = y, x
+        connect = [(cy, cx)]  # Cells we bridge to the center to form a path, but were not Islands yet
+
+        walked = []  # Cells we walk over (may already be islands) to avoid walking backwards
         while (cy, cx) not in self.islands:
+            walked.append((cy, cx))
+
             path = []
             self.four_way(cy, cx, None, lambda ny, nx: path.append((ny, nx)), check_state=State.ISLAND)
-            print(path)
-            assert len(path) == 1, f"invalid island path, multiple islands connected ({cy}, {cx})"
-            cy, cx = path[0]
+            path = [x for x in path if x not in walked]  # Remove already-walked cells
 
-        self.islands[cy, cx].append((y, x))
+            if len(path) == 0:
+                cy, cx = self.connect_to_island(cy, cx)
+                connect.append((cy, cx))
+            else:
+                assert len(path) == 1, f"invalid island path ({cy}, {cx} = {path})"
+                cy, cx = path[0]
+
+        self.islands[cy, cx].extend(connect)
 
     def extend_islands(self):
         extended = 0
@@ -242,11 +260,12 @@ class Solver():
                 if self.puzzle[y, x] == State.UNKNOWN:
                     # Check reachability to all unfinished islands
                     reachable = False
-                    for center in self.islands.copy():
-                        size = self.puzzle[center]
+                    for center, cells in self.islands.copy().items():
+                        size = self.puzzle[center] - len(cells)
+
                         # Calculate distance to island center
                         distance = self.distance(center, (y, x))
-                        if distance < size:
+                        if distance <= size:
                             reachable = True
                             break
 
