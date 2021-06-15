@@ -416,7 +416,7 @@ class Solver():
             # TODO nikoli_2 - Extend (9, 5) to (6, 4) - 2 ways to extend, one would combine 2 islands
             #               - Fill sea between 2 islands (only size > 1 to prevent wrapping unconnected island patches, 1s are done at the very start anyways)
             #      nikoli_4 - Same as nikoli_2: (3, 7) and (3, 9)
-            #      nikoli_5 - Same as nikoli_2: (4, 17) and (6, 17)
+            # TODO nikoli_5 - Connect (4, 17) and (6, 17) - only 1 remaining cell, can't connect to anywhere else
 
             # Cells around full island (Sea)
             wrapped_islands = self.wrap_full_islands()
