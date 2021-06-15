@@ -144,9 +144,10 @@ class Solver():
 
     def validate(self):
         single_sea = len(self.seas) == 1
-        full_sea = np.sum(self.puzzle[self.puzzle == State.SEA]) == self.sea_size
+        full_sea = abs(np.sum(self.puzzle[self.puzzle == State.SEA])) == self.sea_size
         no_unknowns = np.sum(self.puzzle[self.puzzle == State.UNKNOWN]) == 0
 
+        logging.debug(f"{single_sea=}, {full_sea=}, {no_unknowns=}")
         return single_sea and full_sea and no_unknowns
 
     def set_cell(self, y, x, state):
@@ -213,11 +214,11 @@ class Solver():
         connect = [(cy, cx)]  # Cells we bridge to the center to form a path, but were not Islands yet
 
         walked = []  # Cells we walk over (may already be islands) to avoid walking backwards
+        path = []  # Cells we still need to walk over and check
         while (cy, cx) not in self.islands:
             walked.append((cy, cx))
             logging.debug(f"{self.step}: Walk island ({cy}, {cx})")
 
-            path = []
             self.four_way(cy, cx, None, lambda ny, nx: path.append((ny, nx)), check_state=State.ISLAND)
             path = [x for x in path if x not in walked]  # Remove already-walked cells
             logging.debug(f"{self.step}: Walk island path: {path}")
@@ -229,8 +230,8 @@ class Solver():
                 cy, cx = connection
                 connect.append((cy, cx))
             else:
-                assert len(path) == 1, f"invalid island path ({cy}, {cx} = {path})"
                 cy, cx = path[0]
+                path.extend(path[1:])
 
         self.islands[cy, cx].extend(connect)
 
@@ -328,6 +329,30 @@ class Solver():
 
         return wrapped
 
+    def bridge_islands(self):
+        bridged = 0
+
+        for center, cells in self.islands.copy().items():
+            if len(cells) > 1:  # Only compare to proper islands and not single patches waiting for merging
+                ways = []
+                for (cy, cx) in cells:
+                    self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)))
+
+                for (wy, wx) in ways:
+                    islands = []
+                    self.four_way(wy, wx, None, lambda iy, ix: islands.append((iy, ix)), check_state=State.ISLAND)
+
+                    islands = [island for island in islands if island not in cells]  # Prevent going backwards
+
+                    for (iy, ix) in islands:
+                        # Find island center from found cell
+                        icenter = next((icenter for icenter, icells in self.islands.items() if (iy, ix) in icells), None)
+                        if self.puzzle[icenter] > 0:  # Only compare to proper islands and not single patches waiting for merging
+                            logging.debug(f"{self.step}: Bridging sea between islands {center} and {icenter}")
+                            self.set_cell(wy, wx, State.SEA)
+
+        return bridged
+
     def extend_seas(self):
         extended = 0
 
@@ -390,6 +415,7 @@ class Solver():
                 if (pool[0][1] == State.UNKNOWN and pool[1][1] == State.SEA and pool[2][1] == State.SEA and pool[3][1] == State.SEA):
                     # 3 Seas, 1 Unknown = Must be island
                     cy, cx = pool[0][0]
+                    logging.debug(f"{self.step}: Solving pool ({cy}, {cx})")
                     self.set_cell(cy, cx, State.ISLAND)
                     self.walk_island(cy, cx)
                     prevented_pools += 1
@@ -484,9 +510,6 @@ class Solver():
             # Only possible island extension (Island)
             logging.debug(f"Extending islands ({self.step})")
             extended_islands = self.extend_islands()
-            # TODO nikoli_2 - Extend (9, 5) to (6, 4) - 2 ways to extend, one would combine 2 islands
-            #               - Fill sea between 2 islands (only size > 1 to prevent wrapping unconnected island patches, 1s are done at the very start anyways)
-            #      nikoli_4 - Same as nikoli_2: (3, 7) and (3, 9)
             # TODO nikoli_5 - Connect (4, 17) and (6, 17) - only 1 remaining cell, can't connect to anywhere else
 
             # Cells around full island (Sea)
@@ -513,13 +536,18 @@ class Solver():
             logging.debug(f"Extending seas ({self.step})")
             extended_seas = self.extend_seas()
 
+            # Fill spacers between partially-complete islands
+            logging.debug(f"Bridging sea between partial islands ({self.step})")
+            bridged_islands = self.bridge_islands()
+
             if (extended_islands == 0
                     and wrapped_islands == 0
                     and unreachables == 0
                     and prevented_pools == 0
                     and merged_patches == 0
                     and merged_seas == 0
-                    and extended_seas == 0):
+                    and extended_seas == 0
+                    and bridged_islands == 0):
                 break
                 # TODO Guess & Backtrack
 
