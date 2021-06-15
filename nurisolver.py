@@ -72,7 +72,8 @@ class Plotter():
             cell = self.font.render(".", True, pygame.Color("black"))
             self.screen.blit(cell, location)
         elif value > 0:
-            location = (rect[0] + self.FONT_SIZE // 3, rect[1] + self.FONT_SIZE // 5)
+            long_offset = 10 if value >= 10 else 0
+            location = (rect[0] + self.FONT_SIZE // 3 - long_offset, rect[1] + self.FONT_SIZE // 5)
             cell = self.font.render(str(value), True, pygame.Color("black"))
             self.screen.blit(cell, location)
 
@@ -240,14 +241,28 @@ class Solver():
                 for (cy, cx) in cells:
                     self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)))
 
-                # Fill if only one possible way (guaranteed correct)
                 if len(ways) == 1:
+                    # Island if only one possible way (guaranteed correct)
                     extended += 1
 
                     ny, nx = ways[0]
                     logging.debug(f"Extended island {center} to ({ny}, {nx})")
                     self.set_cell(ny, nx, State.ISLAND)
                     self.islands[center].append((ny, nx))
+                elif len(ways) == 2 and left == 1:
+                    # Diagonal is Sea if island with remaining size 1 can only extend 2 ways
+                    (ny1, nx1), (ny2, nx2) = ways
+
+                    # Find same Unknown neighbour
+                    ways = [[], []]
+                    self.four_way(ny1, nx1, None, lambda ny, nx: ways[0].append((ny, nx)))
+                    self.four_way(ny2, nx2, None, lambda ny, nx: ways[1].append((ny, nx)))
+                    ways = list(set(ways[0]) & set(ways[1]))  # Same neighbour
+
+                    if len(ways) == 1:
+                        ny, nx = ways[0]
+                        logging.debug(f"Safed island {center} from ({ny}, {nx}) - diagonal sea")
+                        self.set_cell(ny, nx, State.SEA)
 
         return extended
 
@@ -400,12 +415,15 @@ class Solver():
             extended_islands = self.extend_islands()
             # TODO nikoli_2 - Extend (9, 5) to (6, 4) - 2 ways to extend, one would combine 2 islands
             #               - Fill sea between 2 islands (only size > 1 to prevent wrapping unconnected island patches, 1s are done at the very start anyways)
+            #      nikoli_4 - Same as nikoli_2: (3, 7) and (3, 9)
+            #      nikoli_5 - Same as nikoli_2: (4, 17) and (6, 17)
 
             # Cells around full island (Sea)
             wrapped_islands = self.wrap_full_islands()
 
             # Connect alone Seas (Sea)
             extended_seas = self.extend_seas()
+            # TODO Extend sea patches
 
             # Out-of-range of any island (Sea)
             unreachables = self.unreachable_seas()
