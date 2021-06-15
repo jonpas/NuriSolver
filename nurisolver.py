@@ -8,6 +8,7 @@ import logging
 import unittest
 from enum import IntEnum
 from operator import itemgetter
+from pprint import pprint
 
 import numpy as np  # [y, x] or [height, width]
 
@@ -424,16 +425,16 @@ class Solver():
                 ]
                 pool.sort(key=itemgetter(1))  # Assuming State.UNKNOWN < State.SEA
 
-                if (pool[0][1] == State.UNKNOWN and pool[1][1] == State.SEA and pool[2][1] == State.SEA and pool[3][1] == State.SEA):
+                if pool[0][1] == State.UNKNOWN and pool[1][1] == State.SEA and pool[2][1] == State.SEA and pool[3][1] == State.SEA:
                     # 3 Seas, 1 Unknown = Must be island
                     cy, cx = pool[0][0]
                     logging.debug(f"{self.step}: Solving pool ({cy}, {cx})")
                     self.set_cell(cy, cx, State.ISLAND)
                     self.walk_island(cy, cx)
                     prevented_pools += 1
-                elif (pool[0][1] == State.UNKNOWN and pool[1][1] == State.UNKNOWN and pool[2][1] == State.SEA and pool[3][1] == State.SEA):
+                elif pool[0][1] == State.UNKNOWN and pool[1][1] == State.UNKNOWN and pool[2][1] == State.SEA and pool[3][1] == State.SEA:
                     # 2 Seas, 2 Unknowns = At least one of them must be Island
-                    # TODO Find which of the 2 unknowns can be Island
+                    # TODO Find which of the 2 Unknowns can be Island
                     pass
 
         return prevented_pools
@@ -586,7 +587,7 @@ class TestSolver(unittest.TestCase):
 
         print("\n--- SOLVER START ---")
         errors, warnings = 0, 0
-        for file in os.listdir(test_folder):
+        for file in sorted(os.listdir(test_folder), key=lambda x: (len(x), x)):
             name, ext = os.path.splitext(file)
             if not name.endswith(solved_suffix):
                 print(f"{file}...", end="")
