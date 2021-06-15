@@ -161,6 +161,10 @@ class Solver():
                 while self.plotter.handle_events(self.puzzle, plot_wait=self.step >= self.verbose_from_step):
                     pass
 
+        # Tracking
+        if state == State.SEA:
+            self.seas[y, x] = [(y, x)]
+
     def four_way(self, y, x, state=None, func=None, check_state=State.UNKNOWN):
         """Perform four-way operation. Island check includes centers"""
         if y > 0 and min(self.puzzle[y - 1, x], 0) == check_state:
@@ -189,16 +193,6 @@ class Solver():
         """Calculates Manhattan distance between 2 cells."""
         (y1, x1), (y2, x2) = cell1, cell2
         return np.abs(y1 - y2) + np.abs(x1 - x2)
-
-    def merge_seas(self):
-        for center, cells in self.seas.copy().items():
-            #print(self.seas)
-            for scenter, scells in self.seas.copy().items():
-                if center != scenter and center in scells:
-                    self.seas[scenter].extend(cells)
-                    self.seas[scenter] = list(dict.fromkeys(self.seas[scenter]))  # Remove duplicates TODO Needed?
-                    del self.seas[center]
-                    break
 
     def connect_to_island(self, y, x):
         """Connects single Island cell to an Island. Does NOT update the islands map, use with walk_island() only!"""
@@ -260,20 +254,26 @@ class Solver():
                     logging.debug(f"Extended island {center} to ({ny}, {nx})")
                     self.set_cell(ny, nx, State.ISLAND)
                     self.islands[center].append((ny, nx))
-                elif len(ways) == 2 and left == 1:
-                    # Diagonal is Sea if island with remaining size 1 can only extend 2 ways
-                    (ny1, nx1), (ny2, nx2) = ways
+                elif len(ways) == 2:
+                    if left == 1:
+                        # Diagonal is Sea if island with remaining size 1 can only extend 2 ways
+                        (ny1, nx1), (ny2, nx2) = ways
 
-                    # Find same Unknown neighbour
-                    ways = [[], []]
-                    self.four_way(ny1, nx1, None, lambda ny, nx: ways[0].append((ny, nx)))
-                    self.four_way(ny2, nx2, None, lambda ny, nx: ways[1].append((ny, nx)))
-                    ways = list(set(ways[0]) & set(ways[1]))  # Same neighbour
+                        # Find same Unknown neighbour
+                        ways = [[], []]
+                        self.four_way(ny1, nx1, None, lambda ny, nx: ways[0].append((ny, nx)))
+                        self.four_way(ny2, nx2, None, lambda ny, nx: ways[1].append((ny, nx)))
+                        ways = list(set(ways[0]) & set(ways[1]))  # Same neighbour
 
-                    if len(ways) == 1:
-                        ny, nx = ways[0]
-                        logging.debug(f"Safed island {center} from ({ny}, {nx}) - diagonal sea")
-                        self.set_cell(ny, nx, State.SEA)
+                        if len(ways) == 1:
+                            ny, nx = ways[0]
+                            logging.debug(f"Safed island {center} from ({ny}, {nx}) - diagonal sea")
+                            self.set_cell(ny, nx, State.SEA)
+                    else:
+                        # TODO Can only go one way if the other would block a sea patch
+                        if center == (0, 0):
+                            #print(self.seas)
+                            pass
 
         return extended
 
@@ -285,11 +285,8 @@ class Solver():
                 wrapped += 1
 
                 for (cy, cx) in cells.copy():
-                    seas = []
                     logging.debug(f"Wrap full islands ({cy}, {cx})")
-                    self.four_way(cy, cx, State.SEA, lambda ny, nx: seas.append((ny, nx)))
-                    for sea in seas:
-                        self.seas[sea] = [sea]
+                    self.four_way(cy, cx, State.SEA)
 
                 # Cleanup full island from further processing
                 del self.islands[center]
@@ -316,7 +313,6 @@ class Solver():
                             ny, nx = ways[0]
                             logging.debug(f"Extend seas ({ny}, {nx})")
                             self.set_cell(ny, nx, State.SEA)
-                            self.seas[y, x].append((ny, nx))
 
         return extended
 
@@ -341,7 +337,6 @@ class Solver():
                     if not reachable:
                         logging.debug(f"Unreachable ({y}, {x})")
                         self.set_cell(y, x, State.SEA)
-                        self.seas[y, x] = [(y, x)]
                         unreachables += 1
 
         return unreachables
@@ -382,14 +377,39 @@ class Solver():
                 ways = []
                 self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)), check_state=State.ISLAND)
                 if len(ways) == 1:
+                    # Find island center from found cell
                     ny, nx = ways[0]
                     ncenter = next((ncenter for ncenter, ncells in self.islands.items() if (ny, nx) in ncells), None)
-                    logging.debug(f"Merging ({cy}, {cx}) into {ncenter}")
+
+                    logging.debug(f"Merging island patch ({cy}, {cx}) into {ncenter}")
                     self.islands[ncenter].append((cy, cx))
                     del self.islands[cy, cx]
                     merged_islands += 1
 
         return merged_islands
+
+    def merge_sea_patches(self):
+        merged_seas = 0
+
+        for center, cells in self.seas.copy().items():
+            ways = []
+
+            # Check if any cell can extend any single way
+            for (cy, cx) in cells:
+                self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)), check_state=State.SEA)
+
+            if len(ways) > 0:
+                # Find sea patch center from sea cell
+                ny, nx = ways[0]
+                ncenter = next((ncenter for ncenter, ncells in self.seas.items() if (ny, nx) in ncells), None)
+
+                if center != ncenter:
+                    logging.debug(f"{self.step}: Merging sea patch {center} into {ncenter}")
+                    self.seas[ncenter].extend(cells)
+                    del self.seas[center]
+                    merged_seas += 1
+
+        return merged_seas
 
     def solve(self):
         assert not self.solved, "already solved"
@@ -410,32 +430,21 @@ class Solver():
                     if self.puzzle[y - 1, x - 1] > 0:
                         self.set_cell(y - 1, x, State.SEA)
                         self.set_cell(y, x - 1, State.SEA)
-                        self.seas[y - 1, x] = [(y - 1, x), (y, x - 1)]
-                        #self.seas[y - 1, x] = [(y - 1, x)]
-                        #self.seas[y, x - 1] = [(y, x - 1)]
                     elif self.puzzle[y + 1, x - 1] > 0:
                         self.set_cell(y + 1, x, State.SEA)
                         self.set_cell(y, x - 1, State.SEA)
-                        self.seas[y + 1, x] = [(y + 1, x), (y, x - 1)]
-                        #self.seas[y + 1, x] = [(y + 1, x)]
-                        #self.seas[y, x - 1] = [(y, x - 1)]
 
                 # Sea between horizontal/vertical island centers (Sea)
                 if x < self.width - 2:
                     if self.puzzle[y, x] > 0 and self.puzzle[y, x + 2] > 0:
                         self.set_cell(y, x + 1, State.SEA)
-                        self.seas[y, x + 1] = [(y, x + 1)]
                 if y < self.height - 2:
                     if self.puzzle[y, x] > 0 and self.puzzle[y + 2, x] > 0:
                         self.set_cell(y + 1, x, State.SEA)
-                        self.seas[y + 1, x] = [(y + 1, x)]
 
                 # Neighbours of '1' island (Sea)
                 if self.puzzle[y, x] == 1:
-                    seas = []
-                    self.four_way(y, x, State.SEA, lambda ny, nx: seas.append((ny, nx)))
-                    for sea in seas:
-                        self.seas[sea] = [sea]
+                    self.four_way(y, x, State.SEA)
 
         # Continue logical solving steps
         while True:
@@ -444,6 +453,7 @@ class Solver():
             # TODO nikoli_2 - Extend (9, 5) to (6, 4) - 2 ways to extend, one would combine 2 islands
             #               - Fill sea between 2 islands (only size > 1 to prevent wrapping unconnected island patches, 1s are done at the very start anyways)
             #      nikoli_4 - Same as nikoli_2: (3, 7) and (3, 9)
+            # TODO nikoli_2 - Extend (2, 0) to (3, 0) - can't extend to (2, 1) because we cut-off sea patch [(0, 1), (1, 1)], so only 1 way is left
             # TODO nikoli_5 - Connect (4, 17) and (6, 17) - only 1 remaining cell, can't connect to anywhere else
 
             # Cells around full island (Sea)
@@ -462,12 +472,18 @@ class Solver():
             # Merge island patches that were possibly left from unsuccessful island walk
             merged_patches = self.merge_island_patches()
 
-            if extended_islands == 0 and wrapped_islands == 0 and extended_seas == 0 and unreachables == 0 and prevented_pools == 0 and merged_patches == 0:
+            # Merge sea patches into continously growing connected sea
+            merged_seas = self.merge_sea_patches()
+
+            if (extended_islands == 0
+                    and wrapped_islands == 0
+                    and extended_seas == 0
+                    and unreachables == 0
+                    and prevented_pools == 0
+                    and merged_patches == 0
+                    and merged_seas == 0):
                 break
                 # TODO Guess & Backtrack
-
-        self.merge_seas()
-        print(self.seas)
 
         if self.validate():
             self.solved = True
