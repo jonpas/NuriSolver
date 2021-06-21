@@ -144,12 +144,42 @@ class Solver():
         self.sea_size = self.width * self.height - np.sum(self.puzzle[self.puzzle > 0])
 
     def validate(self):
+        """Validates solution for general Nurikabe correctness."""
         single_sea = len(self.seas) == 1
         full_sea = abs(np.sum(self.puzzle[self.puzzle == State.SEA])) == self.sea_size
         no_unknowns = np.sum(self.puzzle[self.puzzle == State.UNKNOWN]) == 0
 
         logging.debug(f"{single_sea=}, {full_sea=}, {no_unknowns=}")
         return single_sea and full_sea and no_unknowns
+
+    def validate_partial(self):
+        """Validates part-solution for correctness."""
+        # No pools
+        for x in range(self.width - 1):
+            for y in range(self.height - 1):
+                c1, c2, c3, c4 = (y, x), (y, x + 1), (y + 1, x), (y + 1, x + 1)
+                pool = [self.puzzle[c1], self.puzzle[c2], self.puzzle[c3], self.puzzle[c4]]
+
+                if all(cell == State.SEA for cell in pool):
+                    return False, f"pool detected ({y}, {x})"
+
+        # No cut-off seas
+        if len(self.seas) > 1:
+            for center, cells in self.seas.items():
+                ways = self.extension_ways(cells)
+                if len(ways) == 0:
+                    return False, f"cut-off sea detected {center}"
+
+        # No cut-off partial islands
+        for center, cells in self.islands.items():
+            left = self.puzzle[center] - len(cells)
+            if left > 0:
+                ways = self.extension_ways(cells)
+                if len(ways) == 0:
+                    pprint(self.islands)
+                    return False, f"cut-off incomplete island detected {center} {left}"
+
+        return True, "ok"
 
     def set_cell(self, y, x, state, center=None):
         assert self.puzzle[y, x] <= 0, f"unable to change island center ({y}, {x})"
@@ -242,15 +272,21 @@ class Solver():
 
         self.islands[cy, cx].extend(connect)
 
-    def is_sea_cutoff(self, y, x, imagine_blocks=[]):
+    def extension_ways(self, cells, check_state=State.UNKNOWN):
+        """Checks if any cell can extend any single way."""
+        ways = []
+
+        for (cy, cx) in cells:
+            self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)), check_state=check_state)
+
+        return ways
+
+    def safe_potential_sea_cutoff(self, y, x, imagine_blocks=[]):
         # Find sea center from given cell
         center, cells = next(((center, cells) for center, cells in self.seas.items() if (y, x) in cells), None)
 
         # Check if any cell can extend any single way
-        ways = []
-        for (cy, cx) in cells:
-            self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)))
-
+        ways = self.extension_ways(cells)
         ways = [way for way in ways if way not in imagine_blocks]  # Remove imaginative blocks
 
         if len(ways) == 0:
@@ -268,11 +304,8 @@ class Solver():
         for center, cells in self.islands.copy().items():
             left = self.puzzle[center] - len(cells)
             if left > 0:
-                ways = []
-
                 # Check if any cell can extend any single way
-                for (cy, cx) in cells:
-                    self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)))
+                ways = self.extension_ways(cells)
 
                 if len(ways) == 1:
                     # Island if only one possible way (guaranteed correct)
@@ -304,7 +337,7 @@ class Solver():
                             seas = []
                             self.four_way(ny, nx, None, lambda ny, nx: seas.append((ny, nx)), check_state=State.SEA)
                             for (sy, sx) in seas:
-                                if self.is_sea_cutoff(sy, sx, imagine_blocks=[(ny, nx)]):
+                                if self.safe_potential_sea_cutoff(sy, sx, imagine_blocks=[(ny, nx)]):
                                     cutoff = True
                                     break
                             if cutoff:
@@ -340,10 +373,7 @@ class Solver():
 
         for center, cells in self.islands.copy().items():
             if len(cells) > 1:  # Only compare to proper islands and not single patches waiting for merging
-                ways = []
-                for (cy, cx) in cells:
-                    self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)))
-
+                ways = self.extension_ways(cells)
                 for (wy, wx) in ways:
                     islands = []
                     self.four_way(wy, wx, None, lambda iy, ix: islands.append((iy, ix)), check_state=State.ISLAND)
@@ -363,12 +393,8 @@ class Solver():
         extended = 0
 
         for center, cells in self.seas.copy().items():
-            ways = []
-
             # Check if any cell can extend any single way
-            for (cy, cx) in cells:
-                self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)))
-
+            ways = self.extension_ways(cells)
             if len(ways) == 1:
                 # Sea if only one possible way (guaranteed correct)
                 ny, nx = ways[0]
@@ -416,7 +442,6 @@ class Solver():
         for x in range(self.width - 1):
             for y in range(self.height - 1):
                 c1, c2, c3, c4 = (y, x), (y, x + 1), (y + 1, x), (y + 1, x + 1)
-
                 pool = [
                     [c1, self.puzzle[c1]],
                     [c2, self.puzzle[c2]],
@@ -442,19 +467,23 @@ class Solver():
     def merge_island_patches(self):
         merged_islands = 0
 
-        for (cy, cx), cells in self.islands.copy().items():
-            if len(cells) == 1:
-                ways = []
-                self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)), check_state=State.ISLAND)
-                if len(ways) == 1:
+        for center, cells in self.islands.copy().items():
+            if not any(self.puzzle[cell] > 0 for cell in cells):
+                # Check if any cell can extend any single way
+                ways = self.extension_ways(cells, check_state=State.ISLAND)
+                ways = [way for way in ways if way not in cells]  # Remove same-patch cells
+
+                if len(ways) > 0:
                     # Find island center from found cell
                     ny, nx = ways[0]
-                    ncenter = next((ncenter for ncenter, ncells in self.islands.items() if (ny, nx) in ncells), None)
+                    ncenter, ncells = next(((ncenter, ncells) for ncenter, ncells in self.islands.items() if (ny, nx) in ncells), (None, None))
 
-                    logging.debug(f"{self.step}: Merging island patch ({cy}, {cx}) into {ncenter}")
-                    self.islands[ncenter].append((cy, cx))
-                    del self.islands[cy, cx]
-                    merged_islands += 1
+                    if ncenter is not None and center not in ncenter:
+                        logging.debug(f"{self.step}: Merging island patch {ncenter} into {center}")
+                        self.islands[ncenter].extend(cells)
+                        if self.islands.get(center, None) is not None:
+                            del self.islands[center]
+                        merged_islands += 1
 
         return merged_islands
 
@@ -462,12 +491,8 @@ class Solver():
         merged_seas = 0
 
         for center, cells in self.seas.copy().items():
-            ways = []
-
             # Check if any cell can extend any single way
-            for (cy, cx) in cells:
-                self.four_way(cy, cx, None, lambda ny, nx: ways.append((ny, nx)), check_state=State.SEA)
-
+            ways = self.extension_ways(cells, check_state=State.SEA)
             ways = [way for way in ways if way not in cells]  # Remove same-patch cells
 
             if len(ways) > 0:
@@ -554,6 +579,10 @@ class Solver():
             logging.debug(f"Bridging sea between partial islands ({self.step})")
             bridged_islands = self.bridge_islands()
 
+            # Merge sea patches again after bridging to avoid cut-off seas misconception in partial check
+            logging.debug(f"Merging sea patches ({self.step})")
+            merged_seas += self.merge_sea_patches()
+
             if (extended_islands == 0
                     and wrapped_islands == 0
                     and unreachables == 0
@@ -562,8 +591,28 @@ class Solver():
                     and merged_seas == 0
                     and extended_seas == 0
                     and bridged_islands == 0):
+                # Save
+                self.saved_game = [self.puzzle.copy(), self.islands.copy(), self.seas.copy(), self.step]
+
+                # TODO Guess
+
+                # Validate guess
+                valid, msg = self.validate_partial()
+                if not valid:
+                    logging.debug(f"Partial validation: {msg}")
+
+                    # Backtrack
+                    self.puzzle, self.islands, self.seas, self.step = self.saved_game
+
+                    if self.plotter:
+                        self.plotter.plot(self.puzzle)
+
                 break
-                # TODO Guess & Backtrack
+            else:
+                valid, msg = self.validate_partial()
+                if not valid:
+                    logging.error(f"Partial validation failed: {msg}")
+                    break
 
         if self.validate():
             self.solved = True
