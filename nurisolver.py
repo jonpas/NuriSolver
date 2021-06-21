@@ -6,6 +6,9 @@ import os
 import time
 import logging
 import unittest
+import random
+import copy
+from collections import deque
 from enum import IntEnum
 from operator import itemgetter
 from pprint import pprint
@@ -63,7 +66,10 @@ class Plotter():
         pygame.display.update()
 
     def plot_cell(self, y, x, value):
-        rect = (x * self.FONT_SIZE, y * self.FONT_SIZE, self.FONT_SIZE, self.FONT_SIZE)
+        rect = (x * self.FONT_SIZE + 2, y * self.FONT_SIZE + 2, self.FONT_SIZE - 2, self.FONT_SIZE - 2)
+
+        # Clear
+        self.screen.fill(pygame.Color("white"), rect)
 
         # Type
         if value == State.SEA:
@@ -118,16 +124,18 @@ class Plotter():
 
 
 class Solver():
-    def __init__(self, puzzle, plotter=None, verbose_from_step=np.inf):
+    def __init__(self, puzzle, plotter=None, verbose_from_step=np.inf, max_guesses=100):
         self.puzzle = puzzle
         self.plotter = plotter
         self.verbose_from_step = verbose_from_step
+        self.max_guesses = max_guesses
 
         self.prepare()
 
     def prepare(self):
         self.solved = False
         self.step = 0
+        self.states = deque()  # Saved game states for guess & backtrack
         self.height, self.width = self.puzzle.shape
 
         # Verify puzzle input
@@ -144,10 +152,17 @@ class Solver():
         self.sea_size = self.width * self.height - np.sum(self.puzzle[self.puzzle > 0])
 
     def save(self):
-        return [self.puzzle.copy(), self.step, self.islands.copy(), self.seas.copy()]
+        print(f"pre-save ({len(self.states)})")
+        state = [self.puzzle, self.islands, self.seas, self.attempted_guesses]
+        self.states.append(copy.deepcopy(state))
+        logging.debug(f"Save ({len(self.states)})")
+        print(f"post-save ({len(self.states)})")
 
-    def load(self, state):
-        self.puzzle, self.step, self.islands, self.seas = state
+    def load(self):
+        print("pre-backtrack", len(self.states))
+        self.puzzle, self.islands, self.seas, self.attempted_guesses = copy.deepcopy(self.states.pop())
+        logging.debug(f"Backtrack ({len(self.states)})")
+        print("post-backtrack", len(self.states))
 
         if self.plotter:
             self.plotter.plot(self.puzzle)
@@ -185,7 +200,6 @@ class Solver():
             if left > 0:
                 ways = self.extension_ways(cells)
                 if len(ways) == 0:
-                    pprint(self.islands)
                     return False, f"cut-off incomplete island detected {center} {left}"
 
         return True, "ok"
@@ -234,6 +248,13 @@ class Solver():
                 func(y, x + 1)
             if state:
                 self.set_cell(y, x + 1, state, center=(y, x + 1))
+
+    def apply_guess(self, y, x, state, center=None):
+        """Stores attempted guess, saves whole puzzle state and updates given cell for continued solving (in this order)."""
+        # Must be done in this order!
+        self.attempted_guesses.append((y, x, state))
+        self.save()
+        self.set_cell(y, x, state, center=center)
 
     @classmethod
     def distance(cls, cell1, cell2):
@@ -392,7 +413,8 @@ class Solver():
                     for (iy, ix) in islands:
                         # Find island center from found cell
                         icenter = next((icenter for icenter, icells in self.islands.items() if (iy, ix) in icells), None)
-                        if self.puzzle[center] > 0 and self.puzzle[icenter] > 0:  # Only compare to proper islands and not single patches waiting for merging
+                        # Only compare to proper islands and not single patches waiting for merging
+                        if self.puzzle[center] > 0 and icenter is not None and self.puzzle[icenter] > 0:
                             logging.debug(f"{self.step}: Bridging sea between islands {center} and {icenter}")
                             self.set_cell(wy, wx, State.SEA, center=(wy, wx))
 
@@ -488,7 +510,7 @@ class Solver():
                     ncenter, ncells = next(((ncenter, ncells) for ncenter, ncells in self.islands.items() if (ny, nx) in ncells), (None, None))
 
                     if ncenter is not None and center not in ncenter:
-                        logging.debug(f"{self.step}: Merging island patch {ncenter} into {center}")
+                        logging.debug(f"{self.step}: Merging island patch {center} into {ncenter}")
                         self.islands[ncenter].extend(cells)
                         if self.islands.get(center, None) is not None:
                             del self.islands[center]
@@ -517,17 +539,8 @@ class Solver():
 
         return merged_seas
 
-    def solve(self):
-        assert not self.solved, "already solved"
-
-        self.islands = dict()  # (y, x): [coordinates] - Incomplete islands
-        self.seas = dict()  # (y, x): [coordinates] - Sea patches (final sea should have one big "patch")
-
-        self.max_guesses = 10  # Maximum amount of consecutive gusesses that can fail TODO Arg
-        last_valid_state = self.save()  # Saved game state for guessing
-        guesses = 0
-
-        # First logical pass and data preparation
+    def solve_logic_initial(self):
+        """First logical pass and data preparation."""
         for x in range(self.width):
             for y in range(self.height):
                 # Compose islands
@@ -556,81 +569,145 @@ class Solver():
                 if self.puzzle[y, x] == 1:
                     self.four_way(y, x, State.SEA)
 
-        # Continue logical solving steps or guess on failure
-        while True:
-            # Only possible island extension (Island)
-            logging.debug(f"Extending islands ({self.step})")
-            extended_islands = self.extend_islands()
-            # TODO nikoli_5 - Connect (4, 17) and (6, 17) - only 1 remaining cell, can't connect to anywhere else
-            #               - Connect (2, 3) and (1, 3) - same as above
+    def solve_logic(self):
+        operations = 0
 
-            # Cells around full island (Sea)
-            logging.debug(f"Wrapping full islands ({self.step})")
-            wrapped_islands = self.wrap_full_islands()
+        # Only possible island extension (Island)
+        logging.debug(f"Extending islands ({self.step})")
+        operations += self.extend_islands()
+        # TODO nikoli_5 - Connect (4, 17) and (6, 17) - only 1 remaining cell, can't connect to anywhere else
+        #               - Connect (2, 3) and (1, 3) - same as above
 
-            # Out-of-range of any island (Sea)
-            logging.debug(f"Searching for unreachable seas ({self.step})")
-            unreachables = self.unreachable_seas()
+        # Cells around full island (Sea)
+        logging.debug(f"Wrapping full islands ({self.step})")
+        operations += self.wrap_full_islands()
 
-            # Prevent pools (square Sea) (at least one of four must be Island)
-            logging.debug(f"Resolving potential pools ({self.step})")
-            prevented_pools = self.potential_pools()
+        # Out-of-range of any island (Sea)
+        logging.debug(f"Searching for unreachable seas ({self.step})")
+        operations += self.unreachable_seas()
 
-            # Merge island patches that were possibly left from unsuccessful island walk
-            logging.debug(f"Merging island patches ({self.step})")
-            merged_patches = self.merge_island_patches()
+        # Prevent pools (square Sea) (at least one of four must be Island)
+        logging.debug(f"Resolving potential pools ({self.step})")
+        operations += self.potential_pools()
 
-            # Merge sea patches into continously growing connected sea
-            logging.debug(f"Merging sea patches ({self.step})")
-            merged_seas = self.merge_sea_patches()
+        # Merge island patches that were possibly left from unsuccessful island walk
+        logging.debug(f"Merging island patches ({self.step})")
+        operations += self.merge_island_patches()
 
-            # Extend seas (after merging sea patches to prevent over-extending)
-            logging.debug(f"Extending seas ({self.step})")
-            extended_seas = self.extend_seas()
+        # Merge sea patches into continously growing connected sea
+        logging.debug(f"Merging sea patches ({self.step})")
+        operations += self.merge_sea_patches()
 
-            # Fill spacers between partially-complete islands
-            logging.debug(f"Bridging sea between partial islands ({self.step})")
-            bridged_islands = self.bridge_islands()
+        # Extend seas (after merging sea patches to prevent over-extending)
+        logging.debug(f"Extending seas ({self.step})")
+        operations += self.extend_seas()
 
-            # Merge sea patches again after bridging to avoid cut-off seas misconception in partial check
-            logging.debug(f"Merging sea patches ({self.step})")
-            merged_seas += self.merge_sea_patches()
+        # Fill spacers between partially-complete islands
+        logging.debug(f"Bridging sea between partial islands ({self.step})")
+        operations += self.bridge_islands()
 
-            if (extended_islands == 0
-                    and wrapped_islands == 0
-                    and unreachables == 0
-                    and prevented_pools == 0
-                    and merged_patches == 0
-                    and merged_seas == 0
-                    and extended_seas == 0
-                    and bridged_islands == 0):
+        # Merge sea patches again after bridging to avoid cut-off seas misconception in partial check
+        logging.debug(f"Merging sea patches ({self.step})")
+        operations += self.merge_sea_patches()
+
+        return operations
+
+    def guess_island_extend(self):
+        # Sort islands by island size
+        islands = self.islands.copy()
+        islands = dict(sorted(islands.items(), key=lambda x: self.puzzle[x[0]]))
+
+        # Find first island we can take a guess at
+        for center, cells in islands.items():
+            left = self.puzzle[center] - len(cells)
+            if left > 0:
+                # Check if any cell can extend any way
+                ways = self.extension_ways(cells)
+
+                for way in ways:
+                    y, x = way
+                    if (y, x, State.ISLAND) not in self.attempted_guesses:
+                        logging.debug(f"{self.step}: Guessed island extension {center} to {way}")
+                        self.apply_guess(y, x, State.ISLAND, center=center)
+
+                        # Merge island patches as we guess island expansion
+                        logging.debug(f"Merging island patches after guess ({self.step})")
+                        self.merge_island_patches()
+
+                        return True
+
+        return False
+
+    def guess_random(self):
+        pass
+        # for x in range(self.width):
+        #     for y in range(self.height):
+        #         if self.puzzle[y, x] == State.UNKNOWN:
+        #             if (y, x, State.ISLAND) not in self.attempted_guesses:
+        #                 r = random.choice([State.ISLAND, State.SEA])
+        #                 self.set_cell(y, x, r, center=None if r == State.ISLAND else (y, x))
+        #                 self.attempted_guesses.append((y, x, r))
+        #                 return
+
+    def solve_guess(self):
+        guessed = False
+
+        # Guess an island extension, starting with smallest islands
+        logging.debug(f"Guessing island extension ({self.step})")
+        guessed = self.guess_island_extend()
+
+        if not guessed:
+            # TODO More different guesses?
+            pass
+
+        return guessed
+
+    def solve(self):
+        assert not self.solved, "already solved"
+
+        self.islands = dict()  # (y, x): [coordinates] - Incomplete islands
+        self.seas = dict()  # (y, x): [coordinates] - Sea patches (final sea should have one big "patch")
+
+        self.guesses = 0
+        self.attempted_guesses = []  # (y, x, State)
+
+        # First logical pass and data preparation
+        self.solve_logic_initial()
+
+        # Continue logical solving steps or guesses
+        while not self.solved and self.guesses < self.max_guesses:
+            # Logic
+            operations = self.solve_logic()
+            guessing = False
+
+            if operations == 0:
                 valid, msg = self.validate_partial()
                 if valid:
-                    if self.validate():
-                        if guesses > 0:
-                            logging.info(f"Solved after {guesses} guesses")
-                        self.solved = True
-                        break
-                else:
-                    logging.debug(f"Partial validation failed on guess: {msg}")
+                    # Guess
+                    guessing = self.solve_guess()
+                    #print(self.states)
+                    if guessing:
+                        self.guesses += 1
+                        valid, msg = self.validate_partial()
+                        if valid:
+                            logging.debug(f"Partial validation failed after guess: {msg} ({self.step})")
+                            self.load()
+                    else:
+                        logging.debug("Failed to guess")
+                        self.load()
+                        guessing = True
+                elif self.states:
+                    logging.debug(f"Partial validation failed ({self.step})")
+                    self.load()
+                    guessing = True
 
-                    # Backtrack
-                    self.load(last_valid_state)
+            # Out of options
+            if operations == 0 and not guessing:
+                self.solved = self.validate()
+                break
 
-                if guesses >= self.max_guesses:
-                    logging.error(f"Exiting after {guesses} failed guesses")
-                    break
-
-                # Save
-                last_valid_state = self.save()
-
-                # TODO Guess
-                guesses += 1
-            else:
-                valid, msg = self.validate_partial()
-                if not valid:
-                    logging.error(f"Partial validation failed: {msg}")
-                    break
+        if self.guesses > 0:
+            logging.info(f"Attempted {self.guesses} guesses")
 
         return self.solved
 
@@ -685,8 +762,10 @@ def main():
     parser = argparse.ArgumentParser(description="Nurikabe Solver")
     parser.add_argument("file", type=str, nargs="?", help="read puzzle from file (run tests if none)")
     parser.add_argument("--plot", "-p", action="store_true", help="plot solution (requires pygame)")
+    parser.add_argument("--guess", "-g", type=int, default=100,
+                        help="guess steps when logic is exhausted, limited by maximum amount of failed guesses")
     parser.add_argument("--verbose", "-v", type=int, nargs="?", default=0, const=1,
-                        help="plot solving steps on mouse button or space key press (requires pygame)")
+                        help="plot solving steps on mouse button or space key press (requires pygame), optionally start on given step")
     parser.add_argument("--debug", "-d", action="store_true", help="log debug steps and plot additional information (requires pygame)")
     args = parser.parse_args()
 
@@ -719,7 +798,7 @@ def main():
 
     # Solve
     logging.info(f"Solving...\n{puzzle}")
-    solver = Solver(puzzle, plotter=verbose_plotter, verbose_from_step=args.verbose)
+    solver = Solver(puzzle, plotter=verbose_plotter, verbose_from_step=args.verbose, max_guesses=args.guess)
 
     try:
         start = time.process_time()  # ignore sleep (visualization)
