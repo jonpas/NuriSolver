@@ -143,6 +143,15 @@ class Solver():
         # width * height - (sum of all numbered cells)
         self.sea_size = self.width * self.height - np.sum(self.puzzle[self.puzzle > 0])
 
+    def save(self):
+        return [self.puzzle.copy(), self.step, self.islands.copy(), self.seas.copy()]
+
+    def load(self, state):
+        self.puzzle, self.step, self.islands, self.seas = state
+
+        if self.plotter:
+            self.plotter.plot(self.puzzle)
+
     def validate(self):
         """Validates solution for general Nurikabe correctness."""
         single_sea = len(self.seas) == 1
@@ -514,6 +523,10 @@ class Solver():
         self.islands = dict()  # (y, x): [coordinates] - Incomplete islands
         self.seas = dict()  # (y, x): [coordinates] - Sea patches (final sea should have one big "patch")
 
+        self.max_guesses = 10  # Maximum amount of consecutive gusesses that can fail TODO Arg
+        last_valid_state = self.save()  # Saved game state for guessing
+        guesses = 0
+
         # First logical pass and data preparation
         for x in range(self.width):
             for y in range(self.height):
@@ -543,7 +556,7 @@ class Solver():
                 if self.puzzle[y, x] == 1:
                     self.four_way(y, x, State.SEA)
 
-        # Continue logical solving steps
+        # Continue logical solving steps or guess on failure
         while True:
             # Only possible island extension (Island)
             logging.debug(f"Extending islands ({self.step})")
@@ -591,31 +604,33 @@ class Solver():
                     and merged_seas == 0
                     and extended_seas == 0
                     and bridged_islands == 0):
-                # Save
-                self.saved_game = [self.puzzle.copy(), self.islands.copy(), self.seas.copy(), self.step]
-
-                # TODO Guess
-
-                # Validate guess
                 valid, msg = self.validate_partial()
-                if not valid:
-                    logging.debug(f"Partial validation: {msg}")
+                if valid:
+                    if self.validate():
+                        if guesses > 0:
+                            logging.info(f"Solved after {guesses} guesses")
+                        self.solved = True
+                        break
+                else:
+                    logging.debug(f"Partial validation failed on guess: {msg}")
 
                     # Backtrack
-                    self.puzzle, self.islands, self.seas, self.step = self.saved_game
+                    self.load(last_valid_state)
 
-                    if self.plotter:
-                        self.plotter.plot(self.puzzle)
+                if guesses >= self.max_guesses:
+                    logging.error(f"Exiting after {guesses} failed guesses")
+                    break
 
-                break
+                # Save
+                last_valid_state = self.save()
+
+                # TODO Guess
+                guesses += 1
             else:
                 valid, msg = self.validate_partial()
                 if not valid:
                     logging.error(f"Partial validation failed: {msg}")
                     break
-
-        if self.validate():
-            self.solved = True
 
         return self.solved
 
