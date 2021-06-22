@@ -152,17 +152,13 @@ class Solver():
         self.sea_size = self.width * self.height - np.sum(self.puzzle[self.puzzle > 0])
 
     def save(self):
-        print(f"pre-save ({len(self.states)})")
         state = [self.puzzle, self.islands, self.seas, self.attempted_guesses]
         self.states.append(copy.deepcopy(state))
         logging.debug(f"Save ({len(self.states)})")
-        print(f"post-save ({len(self.states)})")
 
     def load(self):
-        print("pre-backtrack", len(self.states))
         self.puzzle, self.islands, self.seas, self.attempted_guesses = copy.deepcopy(self.states.pop())
         logging.debug(f"Backtrack ({len(self.states)})")
-        print("post-backtrack", len(self.states))
 
         if self.plotter:
             self.plotter.plot(self.puzzle)
@@ -195,12 +191,14 @@ class Solver():
                     return False, f"cut-off sea detected {center}"
 
         # No cut-off partial islands
+        #pprint(self.islands)
         for center, cells in self.islands.items():
+            # TODO Remove?
             left = self.puzzle[center] - len(cells)
-            if left > 0:
-                ways = self.extension_ways(cells)
-                if len(ways) == 0:
-                    return False, f"cut-off incomplete island detected {center} {left}"
+            # if left > 0:
+            ways = self.extension_ways(cells)
+            if len(ways) == 0:
+                return False, f"cut-off incomplete island detected {center} {left}"
 
         return True, "ok"
 
@@ -224,7 +222,10 @@ class Solver():
                 elif (y, x) not in self.seas[center]:
                     self.seas[center].append((y, x))
             elif state == State.ISLAND:
-                self.islands[center].append((y, x))
+                if self.islands.get(center, None) is None:
+                    self.islands[center] = [(y, x)]
+                elif (y, x) not in self.islands[center]:
+                    self.islands[center].append((y, x))
 
     def four_way(self, y, x, state=None, func=None, check_state=State.UNKNOWN):
         """Perform four-way operation. Island check includes centers"""
@@ -300,7 +301,9 @@ class Solver():
                 cy, cx = path[0]
                 path.extend(path[1:])
 
-        self.islands[cy, cx].extend(connect)
+        left = self.puzzle[cy, cx] - len(self.islands[cy, cx])
+        if left >= len(connect):
+            self.islands[cy, cx].extend(connect)
 
     def extension_ways(self, cells, check_state=State.UNKNOWN):
         """Checks if any cell can extend any single way."""
@@ -614,8 +617,7 @@ class Solver():
 
     def guess_island_extend(self):
         # Sort islands by island size
-        islands = self.islands.copy()
-        islands = dict(sorted(islands.items(), key=lambda x: self.puzzle[x[0]]))
+        islands = dict(sorted(self.islands.items(), key=lambda x: self.puzzle[x[0]]))
 
         # Find first island we can take a guess at
         for center, cells in islands.items():
@@ -674,37 +676,38 @@ class Solver():
         # First logical pass and data preparation
         self.solve_logic_initial()
 
-        # Continue logical solving steps or guesses
-        while not self.solved and self.guesses < self.max_guesses:
-            # Logic
+        while True:
             operations = self.solve_logic()
-            guessing = False
-
             if operations == 0:
                 valid, msg = self.validate_partial()
                 if valid:
-                    # Guess
-                    guessing = self.solve_guess()
-                    #print(self.states)
-                    if guessing:
-                        self.guesses += 1
-                        valid, msg = self.validate_partial()
-                        if valid:
-                            logging.debug(f"Partial validation failed after guess: {msg} ({self.step})")
-                            self.load()
-                    else:
-                        logging.debug("Failed to guess")
-                        self.load()
-                        guessing = True
-                elif self.states:
-                    logging.debug(f"Partial validation failed ({self.step})")
+                    if self.validate():
+                        self.solved = True
+                        break
+                else:
+                    logging.debug(f"Partial validation failed on logic: {msg}")
                     self.load()
-                    guessing = True
 
-            # Out of options
-            if operations == 0 and not guessing:
-                self.solved = self.validate()
-                break
+                if self.guesses >= self.max_guesses:
+                    logging.error(f"Exiting after {self.guesses} failed guesses")
+                    break
+
+                # Guess
+                guessed = self.solve_guess()
+                if guessed:
+                    self.guesses += 1
+                    valid, msg = self.validate_partial()
+                    if not valid:
+                        logging.debug(f"Partial validation failed on guess: {msg}")
+                        self.load()
+                else:
+                    # Backtrack as there are no guesses left
+                    self.load()
+            else:
+                valid, msg = self.validate_partial()
+                if not valid:
+                    logging.debug(f"Partial validation failed: {msg}")
+                    self.load()
 
         if self.guesses > 0:
             logging.info(f"Attempted {self.guesses} guesses")
@@ -808,14 +811,12 @@ def main():
         pygame.quit()
         return 2
 
-    elapsed = (end - start) / 1000.0  # milliseconds
-
     if success:
         logging.info(f"Solved!\n{solver.puzzle}")
     else:
         logging.info("Unsolved!")
 
-    logging.info(f"Process Time: {elapsed} ms")
+    logging.info(f"Process Time: {end - start} s")
 
     # Plot solution
     if args.plot:
