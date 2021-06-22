@@ -9,7 +9,6 @@ import unittest
 import random
 import copy
 from collections import deque
-from enum import IntEnum
 from operator import itemgetter
 from pprint import pprint
 
@@ -20,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s",
                     handlers=[logging.FileHandler("nurisolver.log", "w", encoding="utf-8"), logging.StreamHandler()])
 
 
-class State(IntEnum):
+class State:  # Not using IntEnum as it is 3x slower
     UNKNOWN = -2  # White (dot in unsolved source)
     SEA = -1  # Black (dot in solved source)
     ISLAND = 0  # Dot (number in source)
