@@ -6,7 +6,6 @@ import os
 import time
 import logging
 import unittest
-import random
 import copy
 from collections import deque
 from operator import itemgetter
@@ -156,11 +155,17 @@ class Solver():
         logging.debug(f"Save ({len(self.states)})")
 
     def load(self):
+        if not self.states:
+            logging.warning("Backtracking failed, no saved states left!")
+            return False
+
         self.puzzle, self.islands, self.seas, self.attempted_guesses = copy.deepcopy(self.states.pop())
         logging.debug(f"Backtrack ({len(self.states)})")
 
         if self.plotter:
             self.plotter.plot(self.puzzle)
+
+        return True
 
     def validate(self):
         """Validates solution for general Nurikabe correctness."""
@@ -190,14 +195,10 @@ class Solver():
                     return False, f"cut-off sea detected {center}"
 
         # No cut-off partial islands
-        #pprint(self.islands)
         for center, cells in self.islands.items():
-            # TODO Remove?
-            left = self.puzzle[center] - len(cells)
-            # if left > 0:
             ways = self.extension_ways(cells)
             if len(ways) == 0:
-                return False, f"cut-off incomplete island detected {center} {left}"
+                return False, f"cut-off incomplete island detected {center}"
 
         return True, "ok"
 
@@ -262,6 +263,22 @@ class Solver():
         (y1, x1), (y2, x2) = cell1, cell2
         return np.abs(y1 - y2) + np.abs(x1 - x2)
 
+    @classmethod
+    def find_closest(self, center, cells):
+        return min(cells, key=lambda x: self.distance(center, x))
+
+    @classmethod
+    def find_closest_pair(self, cells1, cells2):
+        closest1, closest2, distance = None, None, np.inf
+        for cell1 in cells1:
+            cell2 = self.find_closest(cell1, cells2)
+
+            dist = self.distance(cell1, cell2)
+            if dist < distance:
+                closest1, closest2, distance = cell1, cell2, dist
+
+        return closest1, closest2
+
     def connect_to_island(self, y, x):
         """Connects single Island cell to an Island. Does NOT update the islands map, use with walk_island() only!"""
         ways = []
@@ -300,9 +317,7 @@ class Solver():
                 cy, cx = path[0]
                 path.extend(path[1:])
 
-        left = self.puzzle[cy, cx] - len(self.islands[cy, cx])
-        if left >= len(connect):
-            self.islands[cy, cx].extend(connect)
+        self.islands[cy, cx].extend(connect)
 
     def extension_ways(self, cells, check_state=State.UNKNOWN):
         """Checks if any cell can extend any single way."""
@@ -335,7 +350,7 @@ class Solver():
 
         for center, cells in self.islands.copy().items():
             left = self.puzzle[center] - len(cells)
-            if left > 0:
+            if left > 0:  # Required to prevent over-extension
                 # Check if any cell can extend any single way
                 ways = self.extension_ways(cells)
 
@@ -384,19 +399,26 @@ class Solver():
 
         return extended
 
+    def wrap_full_island(self, center):
+        cells = self.islands[center]
+
+        if len(cells) == self.puzzle[center]:
+            for (cy, cx) in cells:
+                logging.debug(f"{self.step}: Wrap full islands ({cy}, {cx})")
+                self.four_way(cy, cx, State.SEA)
+
+            # Cleanup full island from further processing
+            del self.islands[center]
+
+            return True
+        return False
+
     def wrap_full_islands(self):
         wrapped = 0
 
-        for center, cells in self.islands.copy().items():
-            if len(cells) == self.puzzle[center]:
+        for center, _ in self.islands.copy().items():
+            if self.wrap_full_island(center):
                 wrapped += 1
-
-                for (cy, cx) in cells.copy():
-                    logging.debug(f"{self.step}: Wrap full islands ({cy}, {cx})")
-                    self.four_way(cy, cx, State.SEA)
-
-                # Cleanup full island from further processing
-                del self.islands[center]
 
         return wrapped
 
@@ -404,7 +426,7 @@ class Solver():
         bridged = 0
 
         for center, cells in self.islands.copy().items():
-            if len(cells) > 1:  # Only compare to proper islands and not single patches waiting for merging
+            if self.puzzle[center] > 0 or len(cells) > 1:  # Only compare to proper islands and not single patches waiting for merging
                 ways = self.extension_ways(cells)
                 for (wy, wx) in ways:
                     islands = []
@@ -414,11 +436,16 @@ class Solver():
 
                     for (iy, ix) in islands:
                         # Find island center from found cell
-                        icenter = next((icenter for icenter, icells in self.islands.items() if (iy, ix) in icells), None)
+                        icenter, icells = next(((icenter, icells) for icenter, icells in self.islands.items() if (iy, ix) in icells), (None, None))
                         # Only compare to proper islands and not single patches waiting for merging
-                        if self.puzzle[center] > 0 and icenter is not None and self.puzzle[icenter] > 0:
-                            logging.debug(f"{self.step}: Bridging sea between islands {center} and {icenter}")
-                            self.set_cell(wy, wx, State.SEA, center=(wy, wx))
+                        if self.puzzle[center] > 0 and icenter is not None:
+                            # Also include lone islands within range
+                            left = self.puzzle[center] - len(cells)
+                            c1, c2 = self.find_closest_pair(cells, icells)
+
+                            if self.puzzle[icenter] > 0 or left < self.distance(c1, c2):
+                                logging.debug(f"{self.step}: Bridging sea between islands {center} and {icenter}")
+                                self.set_cell(wy, wx, State.SEA, center=(wy, wx))
 
         return bridged
 
@@ -450,6 +477,13 @@ class Solver():
         for x in range(self.width):
             for y in range(self.height):
                 if self.puzzle[y, x] == State.UNKNOWN:
+                    # Check constrained by seas
+                    ways = []
+                    self.four_way(y, x, None, lambda cy, cx: ways.append((cy, cx)), check_state=State.SEA)
+                    if len(ways) == 4:
+                        self.set_cell(y, x, State.SEA, center=ways[0])
+                        unreachables += 1
+
                     # Check reachability to all unfinished islands
                     reachable = False
                     for center, cells in self.islands.copy().items():
@@ -518,6 +552,11 @@ class Solver():
                             del self.islands[center]
                         merged_islands += 1
 
+        # Cleanup full islands from further processing
+        for center, _ in self.islands.copy().items():
+            if self.wrap_full_island(center):
+                merged_islands += 1
+
         return merged_islands
 
     def merge_sea_patches(self):
@@ -579,6 +618,7 @@ class Solver():
         operations += self.extend_islands()
         # TODO nikoli_5 - Connect (4, 17) and (6, 17) - only 1 remaining cell, can't connect to anywhere else
         #               - Connect (2, 3) and (1, 3) - same as above
+        # TODO magazine_1 - Connect (9, 1) whole region (extend ways == left)
 
         # Cells around full island (Sea)
         logging.debug(f"Wrapping full islands ({self.step})")
@@ -620,35 +660,25 @@ class Solver():
 
         # Find first island we can take a guess at
         for center, cells in islands.items():
-            left = self.puzzle[center] - len(cells)
-            if left > 0:
-                # Check if any cell can extend any way
-                ways = self.extension_ways(cells)
+            # Check if any cell can extend any way
+            ways = self.extension_ways(cells)
 
-                for way in ways:
-                    y, x = way
-                    if (y, x, State.ISLAND) not in self.attempted_guesses:
-                        logging.debug(f"{self.step}: Guessed island extension {center} to {way}")
-                        self.apply_guess(y, x, State.ISLAND, center=center)
+            for way in ways:
+                y, x = way
+                if (y, x, State.ISLAND) not in self.attempted_guesses:
+                    logging.debug(f"{self.step}: Guessed island extension {center} to {way}")
+                    self.apply_guess(y, x, State.ISLAND, center=center)
 
-                        # Merge island patches as we guess island expansion
-                        logging.debug(f"Merging island patches after guess ({self.step})")
-                        self.merge_island_patches()
+                    # Merge island patches as we guess island expansion
+                    logging.debug(f"Merging island patches after guess ({self.step})")
+                    self.merge_island_patches()
 
-                        return True
+                    # Merge sea patches as they may get introduced while bridging
+                    logging.debug(f"Merging sea patches after guess ({self.step})")
+                    self.merge_sea_patches()
 
+                    return True
         return False
-
-    def guess_random(self):
-        pass
-        # for x in range(self.width):
-        #     for y in range(self.height):
-        #         if self.puzzle[y, x] == State.UNKNOWN:
-        #             if (y, x, State.ISLAND) not in self.attempted_guesses:
-        #                 r = random.choice([State.ISLAND, State.SEA])
-        #                 self.set_cell(y, x, r, center=None if r == State.ISLAND else (y, x))
-        #                 self.attempted_guesses.append((y, x, r))
-        #                 return
 
     def solve_guess(self):
         guessed = False
@@ -684,11 +714,12 @@ class Solver():
                         self.solved = True
                         break
                 else:
-                    logging.debug(f"Partial validation failed on logic: {msg}")
-                    self.load()
+                    logging.debug(f"Validation failed on logic: {msg}")
+                    if not self.load():
+                        break
 
                 if self.guesses >= self.max_guesses:
-                    logging.error(f"Exiting after {self.guesses} failed guesses")
+                    logging.error(f"Aborting after {self.guesses} failed guesses")
                     break
 
                 # Guess
@@ -698,15 +729,18 @@ class Solver():
                     valid, msg = self.validate_partial()
                     if not valid:
                         logging.debug(f"Partial validation failed on guess: {msg}")
-                        self.load()
+                        if not self.load():
+                            break
                 else:
                     # Backtrack as there are no guesses left
-                    self.load()
+                    if not self.load():
+                        break
             else:
                 valid, msg = self.validate_partial()
                 if not valid:
-                    logging.debug(f"Partial validation failed: {msg}")
-                    self.load()
+                    logging.debug(f"Partial validation failed on logic: {msg}")
+                    if not self.load():
+                        break
 
         if self.guesses > 0:
             logging.info(f"Attempted {self.guesses} guesses")
@@ -723,6 +757,15 @@ class TestSolver(unittest.TestCase):
     def test_distance_hard(self):
         distance = Solver.distance((5, 2), (1, 6))
         self.assertEqual(distance, 8)
+
+    def test_find_closest(self):
+        closest = Solver.find_closest((0, 1), [(4, 0), (4, 1)])
+        self.assertEqual(closest, (4, 1))
+
+    def test_find_closest_pair(self):
+        closest1, closest2 = Solver.find_closest_pair([(0, 0), (0, 1)], [(4, 0), (4, 1)])
+        self.assertEqual(closest1, (0, 0))
+        self.assertEqual(closest2, (4, 0))
 
     def test_solver(self):
         test_folder = "test"
