@@ -723,6 +723,8 @@ class Solver():
                     break
 
                 # Guess
+                # TODO Get out of local optimums - every so often return by 2 steps?
+                #      Remember that we can go back into that step? Remove from attempted_guesses (but deprioritize?)
                 guessed = self.solve_guess()
                 if guessed:
                     self.guesses += 1
