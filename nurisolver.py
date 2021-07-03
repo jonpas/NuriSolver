@@ -170,8 +170,8 @@ class Solver():
     def validate(self):
         """Validates solution for general Nurikabe correctness."""
         single_sea = len(self.seas) == 1
-        full_sea = abs(np.sum(self.puzzle[self.puzzle == State.SEA])) == self.sea_size
-        no_unknowns = np.sum(self.puzzle[self.puzzle == State.UNKNOWN]) == 0
+        full_sea = self.count_cells(State.SEA) == self.sea_size
+        no_unknowns = self.count_cells(State.UNKNOWN) == 0
 
         logging.debug(f"{single_sea=}, {full_sea=}, {no_unknowns=}")
         return single_sea and full_sea and no_unknowns
@@ -256,6 +256,9 @@ class Solver():
         self.attempted_guesses.append((y, x, state))
         self.save()
         self.set_cell(y, x, state, center=center)
+
+    def count_cells(self, state):
+        return abs(np.sum(self.puzzle[self.puzzle == state]))
 
     @classmethod
     def distance(cls, cell1, cell2):
@@ -451,6 +454,9 @@ class Solver():
 
     def extend_seas(self):
         extended = 0
+
+        if self.count_cells(State.SEA) == self.sea_size:
+            return 0
 
         for center, cells in self.seas.copy().items():
             # Check if any cell can extend any single way
@@ -785,7 +791,7 @@ class TestSolver(unittest.TestCase):
                 if os.path.exists(solution_file):
                     solution = load(solution_file, dot_value=State.SEA)
 
-                    solver = Solver(puzzle)
+                    solver = Solver(puzzle, max_guesses=1000)
                     success = solver.solve()
                     if success and np.array_equal(solver.puzzle, solution):
                         print(" OK")
