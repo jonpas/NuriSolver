@@ -802,7 +802,7 @@ class TestSolver(unittest.TestCase):
                     end = time.process_time()
 
                     if success and np.array_equal(solver.puzzle, solution):
-                        print(f" OK: {end - start} s")
+                        print(f" OK: {end - start}s ({solver.guesses} guesses)")
                     else:
                         print(f" ERROR\n{solver.puzzle}")
                         errors += 1
@@ -874,7 +874,7 @@ def main():
     else:
         logging.info("Unsolved!")
 
-    logging.info(f"Process Time: {end - start} s")
+    logging.info(f"Process Time: {end - start}s")
 
     # Plot solution
     if args.plot:
