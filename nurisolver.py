@@ -222,17 +222,16 @@ class Solver():
                     pass
 
         # Tracking
-        if center is not None:
-            if state == State.SEA:
-                if self.seas.get(center, None) is None:
-                    self.seas[center] = [(y, x)]
-                elif (y, x) not in self.seas[center]:
-                    self.seas[center].append((y, x))
-            elif state == State.ISLAND:
-                if self.islands.get(center, None) is None:
-                    self.islands[center] = [(y, x)]
-                elif (y, x) not in self.islands[center]:
-                    self.islands[center].append((y, x))
+        if state == State.SEA:
+            if self.seas.get(center, None) is None:
+                self.seas[center] = [(y, x)]
+            elif (y, x) not in self.seas[center]:
+                self.seas[center].append((y, x))
+        elif state == State.ISLAND:
+            if self.islands.get(center, None) is None:
+                self.islands[y, x] = [(y, x)]
+            elif (y, x) not in self.islands[center]:
+                self.islands[center].append((y, x))
 
     def four_way(self, y, x, state=None, func=None, check_state=State.UNKNOWN):
         """Perform four-way operation. Island check includes centers"""
@@ -305,7 +304,7 @@ class Solver():
     def walk_island(self, y, x):
         """Walks island cells to center and adds the new cell"""
         cy, cx = y, x
-        connect = [(cy, cx)]  # Cells we bridge to the center to form a path, but were not Islands yet
+        connect = []  # Cells we bridge to the center to form a path, but were not Islands yet
 
         walked = []  # Cells we walk over (may already be islands) to avoid walking backwards
         path = []  # Cells we still need to walk over and check
