@@ -352,8 +352,15 @@ class Solver():
         extended = 0
 
         for center, cells in self.islands.copy().items():
+            # Extend only if any left (prevent over-extension) or
+            # unfinished island patches that can only go one way
             left = self.puzzle[center] - len(cells)
-            if left > 0:  # Required to prevent over-extension
+            if left > 0 or self.puzzle[center] == 0:
+                # Merge island patches first to prevent over-extension and sea patches before searching for possible cut-offs
+                if self.puzzle[center] == 0:
+                    self.merge_island_patches()
+                    self.merge_sea_patches()
+
                 # Check if any cell can extend any single way
                 ways = self.extension_ways(cells)
 
@@ -622,9 +629,6 @@ class Solver():
         # Only possible island extension (Island)
         logging.debug(f"Extending islands ({self.step})")
         operations += self.extend_islands()
-        # TODO nikoli_5 - Connect (4, 17) and (6, 17) - only 1 remaining cell, can't connect to anywhere else
-        #               - Connect (2, 3) and (1, 3) - same as above
-        # TODO magazine_1 - Connect (9, 1) whole region (extend ways == left)
 
         # Cells around full island (Sea)
         logging.debug(f"Wrapping full islands ({self.step})")
