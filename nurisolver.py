@@ -696,16 +696,72 @@ class Solver():
                     return True
         return False
 
+    def guess_by_distance(self):
+        # Find all unknown and island cells
+        yxdist = []  # [[(y, x), distance], ...]
+        isles = []  # [(y, x), ...]
+
+        for x in range(self.width):
+            for y in range(self.height):
+                if self.puzzle[y, x] == State.UNKNOWN:
+                    yxdist.append([(y, x), self.width + self.height])
+                elif self.puzzle[y, x] == State.ISLAND:
+                    isles.append((y, x))
+
+        # TODO Shuffle unknown cells
+
+        # Determine Manhattan distance from each unknown cell to the nearest island cell
+        for i, (cell, distance) in enumerate(yxdist):
+            isle = self.find_closest(cell, isles)
+            yxdist[i][1] = self.distance(cell, isle)
+
+        # Prioritize the unknown cells by the Manhattan distance to the nearest white cell
+        yxdist.sort(key=itemgetter(1))
+
+        guess_order = []  # [(y, x), ...]
+        for cell, distance in yxdist:
+            if distance < 2:
+                guess_order.append(cell)
+
+        pprint(guess_order)
+
+        for guess in guess_order:
+            y, x = guess
+            yes = False
+            if (y, x, State.ISLAND) not in self.attempted_guesses:
+                logging.debug(f"{self.step}: Guessed by distance island {guess}")
+                self.apply_guess(y, x, State.ISLAND)
+                yes = True
+            elif (y, x, State.SEA) not in self.attempted_guesses:
+                logging.debug(f"{self.step}: Guessed by distance sea {guess}")
+                self.apply_guess(y, x, State.SEA)
+                yes = True
+
+            if yes:
+                # Merge island patches as we guess island expansion
+                logging.debug(f"Merging island patches after guess ({self.step})")
+                self.merge_island_patches()
+
+                # Merge sea patches as they may get introduced while bridging
+                logging.debug(f"Merging sea patches after guess ({self.step})")
+                self.merge_sea_patches()
+
+                pprint(self.islands)
+
+                return True
+
+        return False
+
     def solve_guess(self):
         guessed = False
 
-        # Guess an island extension, starting with smallest islands
-        logging.debug(f"Guessing island extension ({self.step})")
-        guessed = self.guess_island_extend()
+        logging.debug(f"Guessing by distance ({self.step})")
+        guessed = self.guess_by_distance()
 
         if not guessed:
-            # TODO More different guesses?
-            pass
+            # Guess an island extension, starting with smallest islands
+            logging.debug(f"Guessing island extension ({self.step})")
+            guessed = self.guess_island_extend()
 
         return guessed
 
