@@ -199,7 +199,7 @@ class Solver():
         for center, cells in self.islands.items():
             # No too large islands
             left = self.puzzle[center] - len(cells)
-            if left < 0:
+            if self.puzzle[center] > 0 and left < 0:
                 return False, f"too large island detected {center}"
 
             # No cut-off partial islands
