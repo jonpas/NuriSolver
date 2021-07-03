@@ -187,15 +187,22 @@ class Solver():
                 if all(cell == State.SEA for cell in pool):
                     return False, f"pool detected ({y}, {x})"
 
-        # No cut-off seas
+        # Seas
         if len(self.seas) > 1:
             for center, cells in self.seas.items():
+                # No cut-off seas
                 ways = self.extension_ways(cells)
                 if len(ways) == 0:
                     return False, f"cut-off sea detected {center}"
 
-        # No cut-off partial islands
+        # Islands
         for center, cells in self.islands.items():
+            # No too large islands
+            left = self.puzzle[center] - len(cells)
+            if left < 0:
+                return False, f"too large island detected {center}"
+
+            # No cut-off partial islands
             ways = self.extension_ways(cells)
             if len(ways) == 0:
                 return False, f"cut-off incomplete island detected {center}"
