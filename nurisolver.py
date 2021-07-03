@@ -7,6 +7,7 @@ import time
 import logging
 import unittest
 import copy
+import concurrent.futures
 from collections import deque
 from operator import itemgetter
 from pprint import pprint
@@ -16,6 +17,8 @@ import numpy as np  # [y, x] or [height, width]
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s",
                     handlers=[logging.FileHandler("nurisolver.log", "w", encoding="utf-8"), logging.StreamHandler()])
+
+executor = concurrent.futures.ProcessPoolExecutor(2)
 
 
 class State:  # Not using IntEnum as it is 3x slower
@@ -135,6 +138,9 @@ class Solver():
         self.step = 0
         self.states = deque()  # Saved game states for guess & backtrack
         self.height, self.width = self.puzzle.shape
+
+        self.thread = True  # TODO Argument
+        self.threaded = False
 
         # Verify puzzle input
         assert self.height > 0 and self.width > 0, f"invalid puzzle size ({self.height}, {self.width})"
@@ -671,6 +677,30 @@ class Solver():
 
         return operations
 
+    def guess_thread(self, center, y, x):
+        self.threaded = True
+        print("thread")
+        formatter = logging.Formatter("thread [%(levelname)s] %(message)s")
+        logging.getLogger().handlers[1].setFormatter(formatter)
+        logging.getLogger().disabled = True
+
+        logging.debug(f"{self.step}: Guessed island extension {center} to ({y}, {x}) [THREAD]")
+        self.apply_guess(y, x, State.ISLAND, center=center)
+
+        # Merge island patches as we guess island expansion
+        logging.debug(f"Merging island patches after guess ({self.step}) [THREAD]")
+        self.merge_island_patches()
+
+        # Merge sea patches as they may get introduced while bridging
+        logging.debug(f"Merging sea patches after guess ({self.step}) [THREAD]")
+        self.merge_sea_patches()
+
+        solved = self.solve_loop()
+        print("return solve_loop:", solved)
+        self.save()
+
+        return solved, self.states.pop()
+
     def guess_island_extend(self):
         # Sort islands by island size
         islands = dict(sorted(self.islands.items(), key=lambda x: self.puzzle[x[0]]))
@@ -680,21 +710,55 @@ class Solver():
             # Check if any cell can extend any way
             ways = self.extension_ways(cells)
 
-            for way in ways:
-                y, x = way
-                if (y, x, State.ISLAND) not in self.attempted_guesses:
-                    logging.debug(f"{self.step}: Guessed island extension {center} to {way}")
-                    self.apply_guess(y, x, State.ISLAND, center=center)
+            if not self.thread or self.threaded:
+                for way in ways:
+                    y, x = way
+                    if (y, x, State.ISLAND) not in self.attempted_guesses:
+                        logging.debug(f"{self.step}: Guessed island extension {center} to {way}")
+                        self.apply_guess(y, x, State.ISLAND, center=center)
 
-                    # Merge island patches as we guess island expansion
-                    logging.debug(f"Merging island patches after guess ({self.step})")
-                    self.merge_island_patches()
+                        # Merge island patches as we guess island expansion
+                        logging.debug(f"Merging island patches after guess ({self.step})")
+                        self.merge_island_patches()
 
-                    # Merge sea patches as they may get introduced while bridging
-                    logging.debug(f"Merging sea patches after guess ({self.step})")
-                    self.merge_sea_patches()
+                        # Merge sea patches as they may get introduced while bridging
+                        logging.debug(f"Merging sea patches after guess ({self.step})")
+                        self.merge_sea_patches()
 
-                    return True
+                        return True
+            elif self.thread:
+                plotter = self.plotter
+                self.plotter = None
+
+                futures = []
+                for way in ways:
+                    y, x = way
+                    if (y, x, State.ISLAND) not in self.attempted_guesses:
+                        print("executor")
+                        future = executor.submit(self.guess_thread, center, y, x)
+                        futures.append(future)
+
+                print("executor wait")
+                concurrent.futures.wait(futures)
+                print("executor post-wait")
+                self.plotter = plotter
+
+                for i, future in enumerate(futures):
+                    solved, state = future.result()
+
+                    self.puzzle, self.islands, self.seas, self.attempted_guesses = state
+                    if solved:
+                        print("SOLVED!")
+                        return True
+
+                    if self.plotter:
+                        print("plot")
+                        self.plotter.plot(self.puzzle)
+                        while self.plotter.handle_events(self.puzzle, plot_wait=True):
+                            pass
+
+                return True
+
         return False
 
     def solve_guess(self):
@@ -722,6 +786,9 @@ class Solver():
         # First logical pass and data preparation
         self.solve_logic_initial()
 
+        return self.solve_loop()
+
+    def solve_loop(self):
         while True:
             operations = self.solve_logic()
             if operations == 0:
@@ -869,9 +936,11 @@ def main():
     solver = Solver(puzzle, plotter=verbose_plotter, verbose_from_step=args.verbose, max_guesses=args.guess)
 
     try:
-        start = time.process_time()  # ignore sleep (visualization)
+        #start = time.process_time()  # ignore sleep (visualization)
+        start = time.time()  # ignore sleep (visualization)
         success = solver.solve()
-        end = time.process_time()
+        #end = time.process_time()
+        end = time.time()
     except KeyboardInterrupt:
         pygame.quit()
         return 2
