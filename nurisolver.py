@@ -784,17 +784,21 @@ class TestSolver(unittest.TestCase):
         for file in sorted(os.listdir(test_folder), key=lambda x: (len(x), x)):
             name, ext = os.path.splitext(file)
             if not name.endswith(solved_suffix):
-                print(f"{file}...", end="")
                 puzzle = load(os.path.join(test_folder, file))
+                print(f"{file} {puzzle.shape[0]}x{puzzle.shape[1]}...", end="")
                 solution_file = os.path.join(test_folder, f"{name}{solved_suffix}{ext}")
 
                 if os.path.exists(solution_file):
                     solution = load(solution_file, dot_value=State.SEA)
 
-                    solver = Solver(puzzle, max_guesses=1000)
+                    solver = Solver(puzzle, max_guesses=500)
+
+                    start = time.process_time()
                     success = solver.solve()
+                    end = time.process_time()
+
                     if success and np.array_equal(solver.puzzle, solution):
-                        print(" OK")
+                        print(f" OK: {end - start} s")
                     else:
                         print(f" ERROR\n{solver.puzzle}")
                         errors += 1
@@ -850,7 +854,7 @@ def main():
             logging.info("Press a mouse button or space key to solve in steps.")
 
     # Solve
-    logging.info(f"Solving...\n{puzzle}")
+    logging.info(f"Solving {puzzle.shape[0]}x{puzzle.shape[1]}...\n{puzzle}")
     solver = Solver(puzzle, plotter=verbose_plotter, verbose_from_step=args.verbose, max_guesses=args.guess)
 
     try:
@@ -862,7 +866,7 @@ def main():
         return 2
 
     if success:
-        logging.info(f"Solved!\n{solver.puzzle}")
+        logging.info(f"Solved {puzzle.shape[0]}x{puzzle.shape[1]}!\n{solver.puzzle}")
     else:
         logging.info("Unsolved!")
 
