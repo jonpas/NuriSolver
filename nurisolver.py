@@ -488,7 +488,7 @@ class Solver():
 
         return extended
 
-    def unreachable(self, y, x):
+    def unreachable(self, y, x, discovered=[]):
         """Checks complex reachability by path tracing, taking into account combinations ahead of time."""
         # Only unknown cells
         if self.puzzle[y, x] != State.UNKNOWN:
@@ -498,7 +498,7 @@ class Solver():
         # https://en.wikipedia.org/wiki/Breadth-first_search
 
         q = queue.Queue()
-        discovered = set()
+        discovered = set(discovered)
 
         q.put((y, x, 1))
         discovered.add((y, x))
@@ -530,25 +530,11 @@ class Solver():
 
             # Only one island, see if it can be connected
             if len(islands) == 1:
-                num = self.puzzle[islands.pop()]
-                if nc + size <= num:
+                n_cells = self.puzzle[islands.pop()]
+                if nc + size <= n_cells:
                     return False
                 else:
                     continue
-
-            # Multiple patches available, see if they can be connected
-            if patches:
-                # Check impossibly big island
-                impossibly_big = False
-                for p in self.islands:
-                    # +1 for bridge
-                    if self.puzzle[p] > 0 and len(self.islands[p]) + nc + size + 1 <= len(self.islands[p]):
-                        impossibly_big = True
-
-                if impossibly_big:
-                    continue
-                else:
-                    return False
 
             # Continue search to next set of neighbours
             ways = self.extension_ways([(ny, nx)])
@@ -583,7 +569,7 @@ class Solver():
                                 reachable = True
                                 break
 
-                    if not reachable:
+                    if reachable:
                         # Check complex path reachability
                         reachable = not self.unreachable(y, x)
 
@@ -606,6 +592,7 @@ class Solver():
                     [c3, self.puzzle[c3]],
                     [c4, self.puzzle[c4]],
                 ]
+                assert State.UNKNOWN < State.SEA, "code assumes states Unknown < Black in value"
                 pool.sort(key=itemgetter(1))  # Assuming State.UNKNOWN < State.SEA
 
                 if pool[0][1] == State.UNKNOWN and pool[1][1] == State.SEA and pool[2][1] == State.SEA and pool[3][1] == State.SEA:
@@ -616,24 +603,29 @@ class Solver():
                     self.walk_island(cy, cx)
                     prevented_pools += 1
                 elif pool[0][1] == State.UNKNOWN and pool[1][1] == State.UNKNOWN and pool[2][1] == State.SEA and pool[3][1] == State.SEA:
+                    # Merge island patches to avoid blocking off islands in unreachability search
+                    self.merge_island_patches()
+
                     # 2 Seas, 2 Unknowns = At least one of them must be Island
+                    # Attempt to blacken one Unknown and see if other becomes confined
+                    for _ in range(2):
+                        (cy, cx), (oy, ox) = pool[0][0], pool[1][0]
 
-                    # Attempt to blacken one and see if other becomes confined
-                    for i in range(2):
-                        j = 1 if i == 0 else 0
-                        (cy, cx), (oy, ox) = pool[i][0], pool[j][0]
+                        imagine_sea = [(cy, cx)]
+                        unreachable = self.unreachable(oy, ox, discovered=imagine_sea)
 
-                        self.save(verbose=False)
-                        self.set_cell(cy, cx, State.SEA)
-                        ways = self.extension_ways([(oy, ox)], check_state=State.SEA)
-                        self.load(verbose=False)
-
-                        if len(ways) == 4:
+                        if unreachable:
                             logging.debug(f"{self.step}: Solving potential pool ({cy}, {cx})")
                             self.set_cell(cy, cx, State.ISLAND)
                             self.walk_island(cy, cx)
                             prevented_pools += 1
+
+                            # Recursively search for pools again to prevent misidentifying pools as unreachable states
+                            prevented_pools += self.potential_pools()
+
                             break
+
+                        pool[0], pool[1] = pool[1], pool[0]
 
         return prevented_pools
 
