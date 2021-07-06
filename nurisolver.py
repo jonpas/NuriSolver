@@ -624,6 +624,51 @@ class Solver():
 
         return prevented_pools
 
+    def confined(self, center, cells, verboten):
+        debug = False
+        if center == (10, 21):
+            print("THIS TOO")
+        else:
+            return False
+
+        left = self.puzzle[center] - len(cells)
+        ways = self.extension_ways([center])
+        ways = [way for way in ways if way not in verboten]
+        print(center, left, ways)
+
+        for i, way in enumerate(ways.copy()):
+            nways = self.extension_ways([way])
+            if len(nways) < 4:
+                ways.remove(way)
+
+        print(center, left, ways)
+
+        #while left - len(ways) > 0:
+
+        return len(ways) == 0
+
+    def confined_islands(self):
+        prevented_confines = 0
+        return prevented_confines
+
+        for x in range(self.width):
+            for y in range(self.height):
+                if self.puzzle[y, x] == State.UNKNOWN:
+                    debug = False
+                    if (y, x) == (11, 20):
+                        print("THIS")
+                    else:
+                        continue
+
+                    verboten = set([(y, x)])
+
+                    for center, cells in self.islands.items():
+                        if self.confined(center, cells, verboten):
+                            logging.debug(f"{self.step}: Solving confined island {center}")
+                            self.set_cell(y, x, State.SEA)
+
+        return prevented_confines
+
     def merge_island_patches(self):
         merged_islands = 0
 
@@ -741,6 +786,9 @@ class Solver():
         # Merge sea patches again after bridging to avoid cut-off seas misconception in partial check
         logging.debug(f"Merging sea patches ({self.step})")
         operations += self.merge_sea_patches()
+
+        logging.debug(f"Resolving confined regions ({self.step})")
+        operations += self.confined_islands()
 
         return operations
 
