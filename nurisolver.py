@@ -490,13 +490,8 @@ class Solver():
 
     def unreachable(self, y, x, discovered=[]):
         """Checks complex reachability by path tracing, taking into account combinations ahead of time."""
-        # Only unknown cells
-        if self.puzzle[y, x] != State.UNKNOWN:
-            return False
-
         # Use breadth-first search to discover shortest path to an island and construct a chain to it
         # https://en.wikipedia.org/wiki/Breadth-first_search
-
         q = queue.Queue()
         discovered = set(discovered)
 
