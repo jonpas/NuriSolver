@@ -758,11 +758,14 @@ class Solver():
         return operations
 
     def guess_island_extend(self):
-        # Sort islands by island size
+        # Sort islands by island size (ignoring patches)
         islands = dict(sorted(self.islands.items(), key=lambda x: self.puzzle[x[0]]))
 
         # Find first island we can take a guess at
         for center, cells in islands.items():
+            if self.puzzle[center] == 0:
+                continue
+
             # Check if any cell can extend any way
             ways = self.extension_ways(cells)
 
