@@ -290,8 +290,7 @@ class Solver():
 
     def connect_to_island(self, y, x):
         """Connects single Island cell to an Island. Does NOT update the islands map, use with walk_island() only!"""
-        ways = []
-        self.four_way(y, x, None, lambda ny, nx: ways.append((ny, nx)))
+        ways = self.extension_ways([(y, x)])
         if len(ways) == 1:
             ny, nx = ways[0]
             self.set_cell(ny, nx, State.ISLAND)
@@ -312,7 +311,7 @@ class Solver():
             walked.append((cy, cx))
             logging.debug(f"{self.step}: Walk island ({cy}, {cx})")
 
-            self.four_way(cy, cx, None, lambda ny, nx: path.append((ny, nx)), check_state=State.ISLAND)
+            path.extend(self.extension_ways([(cy, cx)], check_state=State.ISLAND))
             path = [x for x in path if x not in walked]  # Remove already-walked cells
             logging.debug(f"{self.step}: Walk island path: {path}")
 
@@ -329,7 +328,7 @@ class Solver():
         self.islands[cy, cx].extend(connect)
 
     def extension_ways(self, cells, check_state=State.UNKNOWN):
-        """Checks if any cell can extend any single way."""
+        """Finds ways cells can extend in."""
         ways = []
 
         for (cy, cx) in cells:
@@ -379,12 +378,11 @@ class Solver():
                 elif len(ways) == 2:
                     if left == 1:
                         # Diagonal is Sea if island with remaining size 1 can only extend 2 ways
-                        (ny1, nx1), (ny2, nx2) = ways
-
                         # Find same Unknown neighbour
-                        ways = [[], []]
-                        self.four_way(ny1, nx1, None, lambda ny, nx: ways[0].append((ny, nx)))
-                        self.four_way(ny2, nx2, None, lambda ny, nx: ways[1].append((ny, nx)))
+                        ways = [
+                            self.extension_ways([ways[0]]),
+                            self.extension_ways([ways[1]]),
+                        ]
                         ways = list(set(ways[0]) & set(ways[1]))  # Same neighbour
 
                         if len(ways) == 1:
@@ -397,8 +395,7 @@ class Solver():
                         for i, (ny, nx) in enumerate(ways):
                             # Pretend we continue island on one way
                             # Find neighbouring seas and check if any would be cutoff
-                            seas = []
-                            self.four_way(ny, nx, None, lambda ny, nx: seas.append((ny, nx)), check_state=State.SEA)
+                            seas = self.extension_ways([(ny, nx)], check_state=State.SEA)
                             for (sy, sx) in seas:
                                 if self.safe_potential_sea_cutoff(sy, sx, imagine_blocks=[(ny, nx)]):
                                     cutoff = True
@@ -445,9 +442,7 @@ class Solver():
             if self.puzzle[center] > 0 or len(cells) > 1:  # Only compare to proper islands and not single patches waiting for merging
                 ways = self.extension_ways(cells)
                 for (wy, wx) in ways:
-                    islands = []
-                    self.four_way(wy, wx, None, lambda iy, ix: islands.append((iy, ix)), check_state=State.ISLAND)
-
+                    islands = self.extension_ways([(wy, wx)], check_state=State.ISLAND)
                     islands = [island for island in islands if island not in cells]  # Prevent going backwards
 
                     for (iy, ix) in islands:
@@ -497,8 +492,7 @@ class Solver():
             for y in range(self.height):
                 if self.puzzle[y, x] == State.UNKNOWN:
                     # Check constrained by seas
-                    ways = []
-                    self.four_way(y, x, None, lambda cy, cx: ways.append((cy, cx)), check_state=State.SEA)
+                    ways = self.extension_ways([(y, x)], check_state=State.SEA)
                     if len(ways) == 4:
                         self.set_cell(y, x, State.SEA, center=ways[0])
                         unreachables += 1
