@@ -297,7 +297,7 @@ class Solver():
         while not solved and futures:
             for i, future in enumerate(futures):
                 try:
-                    solved, state, guesses = future.result(timeout=1)
+                    solved, state, guesses = future.result(timeout=0)
                 except concurrent.futures.TimeoutError:
                     continue
 
