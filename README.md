@@ -8,17 +8,23 @@ Solves any-size Nurikabe using a series of logical procedures and rules. Harder 
 ## Usage
 
 ```
-usage: nurisolver.py [-h] [--plot] [--verbose] [file]
+usage: nurisolver.py [-h] [--plot] [--guess GUESS] [--verbose [VERBOSE]] [--debug] [file]
 
 Nurikabe Solver
 
 positional arguments:
-  file           read puzzle from file (run tests if none)
+  file                  read puzzle from file (run tests if none)
 
 optional arguments:
-  -h, --help     show this help message and exit
-  --plot, -p     plot solution (requires pygame)
-  --verbose, -v  plot solving steps (requires pygame)
+  -h, --help            show this help message and exit
+  --plot, -p            plot solution (requires pygame)
+  --guess GUESS, -g GUESS
+                        guess steps when logic is exhausted, limited by maximum amount of failed guesses
+                        (default: 500)
+  --verbose [VERBOSE], -v [VERBOSE]
+                        plot solving steps on mouse button or space key press (requires pygame), optionally
+                        start on given step
+  --debug, -d           log debug steps and plot additional information (requires pygame)
 ```
 
 
