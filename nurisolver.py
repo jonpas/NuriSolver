@@ -16,10 +16,12 @@ from pprint import pprint
 import numpy as np  # [y, x] or [height, width]
 
 
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s",
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s {%(threadName)s}",
                     handlers=[logging.FileHandler("nurisolver.log", "w", encoding="utf-8"), logging.StreamHandler()])
 
-executor = concurrent.futures.ProcessPoolExecutor(2)
+# Threading
+executor = None
+executor_stop = False
 
 
 class State:  # Not using IntEnum as it is 3x slower
@@ -126,11 +128,12 @@ class Plotter():
 
 
 class Solver():
-    def __init__(self, puzzle, plotter=None, verbose_from_step=np.inf, max_guesses=500):
+    def __init__(self, puzzle, plotter=None, verbose_from_step=np.inf, max_guesses=500, threads=0):
         self.puzzle = puzzle
         self.plotter = plotter
         self.verbose_from_step = verbose_from_step
         self.max_guesses = max_guesses
+        self.threads = threads
 
         self.prepare()
 
@@ -140,8 +143,11 @@ class Solver():
         self.states = deque()  # Saved game states for guess & backtrack
         self.height, self.width = self.puzzle.shape
 
-        self.thread = True  # TODO Argument
-        self.threaded = False
+        # Prepare threading
+        if self.threads > 0:
+            global executor
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.threads, thread_name_prefix="Nuri")
+        self.is_thread = False
 
         # Verify puzzle input
         assert self.height > 0 and self.width > 0, f"invalid puzzle size ({self.height}, {self.width})"
@@ -271,6 +277,40 @@ class Solver():
         self.attempted_guesses.append((y, x, state))
         self.save()
         self.set_cell(y, x, state, center=center)
+
+    def thread_guess(self, func, *args):
+        self.is_thread = True
+        func(*args)
+
+        solved = self.solve_loop()
+        self.save()
+
+        return solved, self.states.pop(), self.guesses
+
+    def start_thread(self, func, *args):
+        solver = copy.deepcopy(self)
+        solver.plotter = None
+        return executor.submit(solver.thread_guess, getattr(solver, func), *args)
+
+    def thread_results(self, futures):
+        solved = False
+        while not solved and futures:
+            for i, future in enumerate(futures):
+                try:
+                    solved, state, guesses = future.result(timeout=1)
+                except concurrent.futures.TimeoutError:
+                    continue
+
+                self.puzzle, self.islands, self.seas, self.attempted_guesses = state
+                self.guesses += guesses
+                if solved:
+                    break
+
+        # Signal threads to stop
+        global executor_stop
+        executor_stop = True
+
+        return solved
 
     def count_cells(self, state):
         return abs(np.sum(self.puzzle[self.puzzle == state]))
@@ -750,13 +790,7 @@ class Solver():
 
         return operations
 
-    def guess_thread(self, center, y, x):
-        self.threaded = True
-        print("thread")
-        formatter = logging.Formatter("thread [%(levelname)s] %(message)s")
-        logging.getLogger().handlers[1].setFormatter(formatter)
-        logging.getLogger().disabled = True
-
+    def guess_island_extend_op(self, center, y, x):
         logging.debug(f"{self.step}: Guessed island extension {center} to ({y}, {x}) [THREAD]")
         self.apply_guess(y, x, State.ISLAND, center=center)
 
@@ -768,15 +802,11 @@ class Solver():
         logging.debug(f"Merging sea patches after guess ({self.step}) [THREAD]")
         self.merge_sea_patches()
 
-        solved = self.solve_loop()
-        print("return solve_loop:", solved)
-        self.save()
-
-        return solved, self.states.pop()
-
     def guess_island_extend(self):
         # Sort islands by island size (ignoring patches)
         islands = dict(sorted(self.islands.items(), key=lambda x: self.puzzle[x[0]]))
+
+        futures = []
 
         # Find first island we can take a guess at
         for center, cells in islands.items():
@@ -786,54 +816,21 @@ class Solver():
             # Check if any cell can extend any way
             ways = self.extension_ways(cells)
 
-            if not self.thread or self.threaded:
-                for way in ways:
-                    y, x = way
-                    if (y, x, State.ISLAND) not in self.attempted_guesses:
-                        logging.debug(f"{self.step}: Guessed island extension {center} to {way}")
-                        self.apply_guess(y, x, State.ISLAND, center=center)
-
-                        # Merge island patches as we guess island expansion
-                        logging.debug(f"Merging island patches after guess ({self.step})")
-                        self.merge_island_patches()
-
-                        # Merge sea patches as they may get introduced while bridging
-                        logging.debug(f"Merging sea patches after guess ({self.step})")
-                        self.merge_sea_patches()
-
+            for way in ways:
+                y, x = way
+                if (y, x, State.ISLAND) not in self.attempted_guesses:
+                    if executor is None or self.is_thread:
+                        # Run directly if not threading or inside a thread already
+                        self.guess_island_extend_op(center, y, x)
                         return True
-            elif self.thread:
-                plotter = self.plotter
-                self.plotter = None
-
-                futures = []
-                for way in ways:
-                    y, x = way
-                    if (y, x, State.ISLAND) not in self.attempted_guesses:
-                        print("executor")
-                        future = executor.submit(self.guess_thread, center, y, x)
+                    elif executor is not None:
+                        # Run in a thread
+                        future = self.start_thread("guess_island_extend_op", center, y, x)
                         futures.append(future)
 
-                print("executor wait")
-                concurrent.futures.wait(futures)
-                print("executor post-wait")
-                self.plotter = plotter
-
-                for i, future in enumerate(futures):
-                    solved, state = future.result()
-
-                    self.puzzle, self.islands, self.seas, self.attempted_guesses = state
-                    if solved:
-                        print("SOLVED!")
-                        return True
-
-                    if self.plotter:
-                        print("plot")
-                        self.plotter.plot(self.puzzle)
-                        while self.plotter.handle_events(self.puzzle, plot_wait=True):
-                            pass
-
-                return True
+        # Wait for thread results if threaded and this is main thread
+        if executor is not None and not self.is_thread:
+            return self.thread_results(futures)
 
         return False
 
@@ -901,6 +898,10 @@ class Solver():
                     logging.debug(f"Partial validation failed on logic: {msg}")
                     if not self.load():
                         break
+
+            # Handle thread stop signal
+            if self.is_thread and executor_stop:
+                return False
 
         if self.guesses > 0:
             logging.info(f"Attempted {self.guesses} guesses")
@@ -976,6 +977,7 @@ def main():
     parser.add_argument("--verbose", "-v", type=int, nargs="?", default=0, const=1,
                         help="plot solving steps on mouse button or space key press (requires pygame), optionally start on given step")
     parser.add_argument("--debug", "-d", action="store_true", help="log debug steps and plot additional information (requires pygame)")
+    parser.add_argument("--threads", "-j", type=int, default=0, help="use threads for guessing")
     args = parser.parse_args()
 
     if args.verbose:
@@ -1007,14 +1009,12 @@ def main():
 
     # Solve
     logging.info(f"Solving {puzzle.shape[0]}x{puzzle.shape[1]}...\n{puzzle}")
-    solver = Solver(puzzle, plotter=verbose_plotter, verbose_from_step=args.verbose, max_guesses=args.guess)
+    solver = Solver(puzzle, plotter=verbose_plotter, verbose_from_step=args.verbose, max_guesses=args.guess, threads=args.threads)
 
     try:
-        #start = time.process_time()  # ignore sleep (visualization)
-        start = time.time()  # ignore sleep (visualization)
+        start = time.process_time()  # ignore sleep (visualization)
         success = solver.solve()
-        #end = time.process_time()
-        end = time.time()
+        end = time.process_time()
     except KeyboardInterrupt:
         pygame.quit()
         return 2
