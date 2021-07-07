@@ -7,6 +7,7 @@ import time
 import logging
 import unittest
 import copy
+import queue
 from collections import deque
 from operator import itemgetter
 from pprint import pprint
@@ -122,7 +123,7 @@ class Plotter():
 
 
 class Solver():
-    def __init__(self, puzzle, plotter=None, verbose_from_step=np.inf, max_guesses=100):
+    def __init__(self, puzzle, plotter=None, verbose_from_step=np.inf, max_guesses=500):
         self.puzzle = puzzle
         self.plotter = plotter
         self.verbose_from_step = verbose_from_step
@@ -149,18 +150,20 @@ class Solver():
         # width * height - (sum of all numbered cells)
         self.sea_size = self.width * self.height - np.sum(self.puzzle[self.puzzle > 0])
 
-    def save(self):
+    def save(self, verbose=True):
         state = [self.puzzle, self.islands, self.seas, self.attempted_guesses]
         self.states.append(copy.deepcopy(state))
-        logging.debug(f"Save ({len(self.states)})")
+        if verbose:
+            logging.debug(f"Save ({len(self.states)})")
 
-    def load(self):
+    def load(self, verbose=True):
         if not self.states:
             logging.warning("Backtracking failed, no saved states left!")
             return False
 
         self.puzzle, self.islands, self.seas, self.attempted_guesses = copy.deepcopy(self.states.pop())
-        logging.debug(f"Backtrack ({len(self.states)})")
+        if verbose:
+            logging.debug(f"Backtrack ({len(self.states)})")
 
         if self.plotter:
             self.plotter.plot(self.puzzle)
@@ -218,7 +221,7 @@ class Solver():
 
             if self.plotter:
                 self.plotter.plot_cell(y, x, state)
-                while self.plotter.handle_events(self.puzzle, plot_wait=self.step >= self.verbose_from_step):
+                while self.plotter.handle_events(self.puzzle, plot_wait=self.step > self.verbose_from_step):
                     pass
 
         # Tracking
@@ -290,8 +293,7 @@ class Solver():
 
     def connect_to_island(self, y, x):
         """Connects single Island cell to an Island. Does NOT update the islands map, use with walk_island() only!"""
-        ways = []
-        self.four_way(y, x, None, lambda ny, nx: ways.append((ny, nx)))
+        ways = self.extension_ways([(y, x)])
         if len(ways) == 1:
             ny, nx = ways[0]
             self.set_cell(ny, nx, State.ISLAND)
@@ -312,7 +314,7 @@ class Solver():
             walked.append((cy, cx))
             logging.debug(f"{self.step}: Walk island ({cy}, {cx})")
 
-            self.four_way(cy, cx, None, lambda ny, nx: path.append((ny, nx)), check_state=State.ISLAND)
+            path.extend(self.extension_ways([(cy, cx)], check_state=State.ISLAND))
             path = [x for x in path if x not in walked]  # Remove already-walked cells
             logging.debug(f"{self.step}: Walk island path: {path}")
 
@@ -329,7 +331,7 @@ class Solver():
         self.islands[cy, cx].extend(connect)
 
     def extension_ways(self, cells, check_state=State.UNKNOWN):
-        """Checks if any cell can extend any single way."""
+        """Finds ways cells can extend in."""
         ways = []
 
         for (cy, cx) in cells:
@@ -379,12 +381,11 @@ class Solver():
                 elif len(ways) == 2:
                     if left == 1:
                         # Diagonal is Sea if island with remaining size 1 can only extend 2 ways
-                        (ny1, nx1), (ny2, nx2) = ways
-
                         # Find same Unknown neighbour
-                        ways = [[], []]
-                        self.four_way(ny1, nx1, None, lambda ny, nx: ways[0].append((ny, nx)))
-                        self.four_way(ny2, nx2, None, lambda ny, nx: ways[1].append((ny, nx)))
+                        ways = [
+                            self.extension_ways([ways[0]]),
+                            self.extension_ways([ways[1]]),
+                        ]
                         ways = list(set(ways[0]) & set(ways[1]))  # Same neighbour
 
                         if len(ways) == 1:
@@ -397,8 +398,7 @@ class Solver():
                         for i, (ny, nx) in enumerate(ways):
                             # Pretend we continue island on one way
                             # Find neighbouring seas and check if any would be cutoff
-                            seas = []
-                            self.four_way(ny, nx, None, lambda ny, nx: seas.append((ny, nx)), check_state=State.SEA)
+                            seas = self.extension_ways([(ny, nx)], check_state=State.SEA)
                             for (sy, sx) in seas:
                                 if self.safe_potential_sea_cutoff(sy, sx, imagine_blocks=[(ny, nx)]):
                                     cutoff = True
@@ -445,9 +445,7 @@ class Solver():
             if self.puzzle[center] > 0 or len(cells) > 1:  # Only compare to proper islands and not single patches waiting for merging
                 ways = self.extension_ways(cells)
                 for (wy, wx) in ways:
-                    islands = []
-                    self.four_way(wy, wx, None, lambda iy, ix: islands.append((iy, ix)), check_state=State.ISLAND)
-
+                    islands = self.extension_ways([(wy, wx)], check_state=State.ISLAND)
                     islands = [island for island in islands if island not in cells]  # Prevent going backwards
 
                     for (iy, ix) in islands:
@@ -490,6 +488,58 @@ class Solver():
 
         return extended
 
+    def unreachable(self, y, x, discovered=[]):
+        """Checks complex reachability by path tracing, taking into account combinations ahead of time."""
+        # Use breadth-first search to discover shortest path to an island and construct a chain to it
+        # https://en.wikipedia.org/wiki/Breadth-first_search
+        q = queue.Queue()
+        discovered = set(discovered)
+
+        q.put((y, x, 1))
+        discovered.add((y, x))
+
+        while not q.empty():
+            ny, nx, nc = q.get()
+
+            islands = set()
+            patches = set()
+            ways = self.extension_ways([(ny, nx)], check_state=State.ISLAND)
+            for (iy, ix) in ways:
+                # Find island center from found cell
+                center = next((icenter for icenter, icells in self.islands.items() if (iy, ix) in icells), None)
+                if center is not None:
+                    if self.puzzle[center] > 0:
+                        islands.add(center)
+                    else:
+                        patches.add(center)
+
+            size = 0
+            for patch in patches:
+                size += len(self.islands[patch])
+            for island in islands:
+                size += len(self.islands[island])
+
+            # More islands able to connect, can't continue
+            if len(islands) > 1:
+                continue
+
+            # Only one island, see if it can be connected
+            if len(islands) == 1:
+                n_cells = self.puzzle[islands.pop()]
+                if nc + size <= n_cells:
+                    return False
+                else:
+                    continue
+
+            # Continue search to next set of neighbours
+            ways = self.extension_ways([(ny, nx)])
+            for (qy, qx) in ways:
+                if (qy, qx) not in discovered:
+                    q.put((qy, qx, nc + 1))
+                discovered.add((qy, qx))
+
+        return True
+
     def unreachable_seas(self):
         unreachables = 0
 
@@ -497,13 +547,12 @@ class Solver():
             for y in range(self.height):
                 if self.puzzle[y, x] == State.UNKNOWN:
                     # Check constrained by seas
-                    ways = []
-                    self.four_way(y, x, None, lambda cy, cx: ways.append((cy, cx)), check_state=State.SEA)
+                    ways = self.extension_ways([(y, x)], check_state=State.SEA)
                     if len(ways) == 4:
                         self.set_cell(y, x, State.SEA, center=ways[0])
                         unreachables += 1
 
-                    # Check reachability to all unfinished islands
+                    # Check simple distance reachability to all unfinished islands
                     reachable = False
                     for center, cells in self.islands.copy().items():
                         left = self.puzzle[center] - len(cells)
@@ -514,6 +563,10 @@ class Solver():
                             if distance <= left:
                                 reachable = True
                                 break
+
+                    if reachable:
+                        # Check complex path reachability
+                        reachable = not self.unreachable(y, x)
 
                     if not reachable:
                         logging.debug(f"{self.step}: Unreachable ({y}, {x})")
@@ -534,6 +587,7 @@ class Solver():
                     [c3, self.puzzle[c3]],
                     [c4, self.puzzle[c4]],
                 ]
+                assert State.UNKNOWN < State.SEA, "code assumes states Unknown < Black in value"
                 pool.sort(key=itemgetter(1))  # Assuming State.UNKNOWN < State.SEA
 
                 if pool[0][1] == State.UNKNOWN and pool[1][1] == State.SEA and pool[2][1] == State.SEA and pool[3][1] == State.SEA:
@@ -544,9 +598,29 @@ class Solver():
                     self.walk_island(cy, cx)
                     prevented_pools += 1
                 elif pool[0][1] == State.UNKNOWN and pool[1][1] == State.UNKNOWN and pool[2][1] == State.SEA and pool[3][1] == State.SEA:
+                    # Merge island patches to avoid blocking off islands in unreachability search
+                    self.merge_island_patches()
+
                     # 2 Seas, 2 Unknowns = At least one of them must be Island
-                    # TODO Find which of the 2 Unknowns can be Island
-                    pass
+                    # Attempt to blacken one Unknown and see if other becomes confined
+                    for _ in range(2):
+                        (cy, cx), (oy, ox) = pool[0][0], pool[1][0]
+
+                        imagine_sea = [(cy, cx)]
+                        unreachable = self.unreachable(oy, ox, discovered=imagine_sea)
+
+                        if unreachable:
+                            logging.debug(f"{self.step}: Solving potential pool ({cy}, {cx})")
+                            self.set_cell(cy, cx, State.ISLAND)
+                            self.walk_island(cy, cx)
+                            prevented_pools += 1
+
+                            # Recursively search for pools again to prevent misidentifying pools as unreachable states
+                            prevented_pools += self.potential_pools()
+
+                            break
+
+                        pool[0], pool[1] = pool[1], pool[0]
 
         return prevented_pools
 
@@ -671,11 +745,14 @@ class Solver():
         return operations
 
     def guess_island_extend(self):
-        # Sort islands by island size
+        # Sort islands by island size (ignoring patches)
         islands = dict(sorted(self.islands.items(), key=lambda x: self.puzzle[x[0]]))
 
         # Find first island we can take a guess at
         for center, cells in islands.items():
+            if self.puzzle[center] == 0:
+                continue
+
             # Check if any cell can extend any way
             ways = self.extension_ways(cells)
 
@@ -795,8 +872,6 @@ class Solver():
                     break
 
                 # Guess
-                # TODO Get out of local optimums - every so often return by 2 steps?
-                #      Remember that we can go back into that step? Remove from attempted_guesses (but deprioritize?)
                 guessed = self.solve_guess()
                 if guessed:
                     self.guesses += 1
@@ -857,7 +932,7 @@ class TestSolver(unittest.TestCase):
                 if os.path.exists(solution_file):
                     solution = load(solution_file, dot_value=State.SEA)
 
-                    solver = Solver(puzzle, max_guesses=500)
+                    solver = Solver(puzzle)
 
                     start = time.process_time()
                     success = solver.solve()
@@ -885,8 +960,8 @@ def main():
     parser = argparse.ArgumentParser(description="Nurikabe Solver")
     parser.add_argument("file", type=str, nargs="?", help="read puzzle from file (run tests if none)")
     parser.add_argument("--plot", "-p", action="store_true", help="plot solution (requires pygame)")
-    parser.add_argument("--guess", "-g", type=int, default=100,
-                        help="guess steps when logic is exhausted, limited by maximum amount of failed guesses")
+    parser.add_argument("--guess", "-g", type=int, default=500,
+                        help="guess steps when logic is exhausted, limited by maximum amount of failed guesses (default: 500)")
     parser.add_argument("--verbose", "-v", type=int, nargs="?", default=0, const=1,
                         help="plot solving steps on mouse button or space key press (requires pygame), optionally start on given step")
     parser.add_argument("--debug", "-d", action="store_true", help="log debug steps and plot additional information (requires pygame)")
