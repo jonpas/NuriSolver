@@ -9,6 +9,7 @@ import unittest
 import copy
 import queue
 import concurrent.futures
+import multiprocessing
 from collections import deque
 from operator import itemgetter
 from pprint import pprint
@@ -16,12 +17,10 @@ from pprint import pprint
 import numpy as np  # [y, x] or [height, width]
 
 
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s {%(threadName)s}",
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s",
                     handlers=[logging.FileHandler("nurisolver.log", "w", encoding="utf-8"), logging.StreamHandler()])
 
-# Threading
-executor = None
-executor_stop = False
+executor, executor_stop = None, None
 
 
 class State:  # Not using IntEnum as it is 3x slower
@@ -145,8 +144,9 @@ class Solver():
 
         # Prepare threading
         if self.threads > 0:
-            global executor
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.threads, thread_name_prefix="Nuri")
+            global executor, executor_stop
+            executor = concurrent.futures.ProcessPoolExecutor(max_workers=self.threads)
+            executor_stop = multiprocessing.Value("i", False)
         self.is_thread = False
 
         # Verify puzzle input
@@ -280,8 +280,10 @@ class Solver():
 
     def thread_guess(self, func, *args):
         self.is_thread = True
-        func(*args)
+        formatter = logging.Formatter("[%(levelname)s] %(message)s {THREAD}")
+        logging.getLogger().handlers[1].setFormatter(formatter)
 
+        func(*args)
         solved = self.solve_loop()
         self.save()
 
@@ -307,8 +309,7 @@ class Solver():
                     break
 
         # Signal threads to stop
-        global executor_stop
-        executor_stop = True
+        executor_stop.value = True
 
         return solved
 
@@ -900,7 +901,7 @@ class Solver():
                         break
 
             # Handle thread stop signal
-            if self.is_thread and executor_stop:
+            if self.is_thread and executor_stop.value:
                 return False
 
         if self.guesses > 0:
@@ -944,7 +945,7 @@ class TestSolver(unittest.TestCase):
                 if os.path.exists(solution_file):
                     solution = load(solution_file, dot_value=State.SEA)
 
-                    solver = Solver(puzzle)
+                    solver = Solver(puzzle, threads=4)
 
                     start = time.process_time()
                     success = solver.solve()
@@ -972,12 +973,12 @@ def main():
     parser = argparse.ArgumentParser(description="Nurikabe Solver")
     parser.add_argument("file", type=str, nargs="?", help="read puzzle from file (run tests if none)")
     parser.add_argument("--plot", "-p", action="store_true", help="plot solution (requires pygame)")
-    parser.add_argument("--guess", "-g", type=int, default=500,
+    parser.add_argument("--guess", "-g", type=int, default=500, metavar="G",
                         help="guess steps when logic is exhausted, limited by maximum amount of failed guesses (default: 500)")
-    parser.add_argument("--verbose", "-v", type=int, nargs="?", default=0, const=1,
+    parser.add_argument("--verbose", "-v", type=int, nargs="?", default=0, const=1, metavar="L",
                         help="plot solving steps on mouse button or space key press (requires pygame), optionally start on given step")
     parser.add_argument("--debug", "-d", action="store_true", help="log debug steps and plot additional information (requires pygame)")
-    parser.add_argument("--threads", "-j", type=int, default=0, help="use threads for guessing")
+    parser.add_argument("--threads", "-j", type=int, default=0, metavar="N", help="use threads for guessing")
     args = parser.parse_args()
 
     if args.verbose:
@@ -1012,10 +1013,13 @@ def main():
     solver = Solver(puzzle, plotter=verbose_plotter, verbose_from_step=args.verbose, max_guesses=args.guess, threads=args.threads)
 
     try:
-        start = time.process_time()  # ignore sleep (visualization)
+        start = time.time()  # includes visualization (sleep)
         success = solver.solve()
-        end = time.process_time()
+        end = time.time()
     except KeyboardInterrupt:
+        # Signal threads to stop
+        executor_stop.value = True
+
         pygame.quit()
         return 2
 
