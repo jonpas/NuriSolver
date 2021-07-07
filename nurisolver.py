@@ -142,7 +142,7 @@ class Solver():
         self.states = deque()  # Saved game states for guess & backtrack
         self.height, self.width = self.puzzle.shape
 
-        # Prepare threading
+        # Prepare threading (inside Solver to support unittest)
         if self.threads > 0:
             global executor, executor_stop
             executor = concurrent.futures.ProcessPoolExecutor(max_workers=self.threads)
@@ -945,7 +945,7 @@ class TestSolver(unittest.TestCase):
                 if os.path.exists(solution_file):
                     solution = load(solution_file, dot_value=State.SEA)
 
-                    solver = Solver(puzzle, threads=4)
+                    solver = Solver(puzzle)
 
                     start = time.process_time()
                     success = solver.solve()
