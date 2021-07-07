@@ -947,7 +947,8 @@ def main():
         success = solver.solve()
         end = time.process_time()
     except KeyboardInterrupt:
-        pygame.quit()
+        if args.plot:
+            pygame.quit()
         return 2
 
     if success:
