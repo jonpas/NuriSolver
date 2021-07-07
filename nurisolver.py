@@ -1020,7 +1020,8 @@ def main():
         # Signal threads to stop
         executor_stop.value = True
 
-        pygame.quit()
+        if args.plot:
+            pygame.quit()
         return 2
 
     if success:
