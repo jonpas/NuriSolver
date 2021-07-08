@@ -297,6 +297,8 @@ class Solver():
     def thread_results(self, futures):
         solved = False
         while not solved and futures:
+            del_futures = []
+
             for i, future in enumerate(futures):
                 try:
                     solved, state, guesses = future.result(timeout=0)
@@ -307,6 +309,9 @@ class Solver():
                 self.guesses += guesses
                 if solved:
                     break
+
+                del_futures.append(i)
+            futures[:] = [future for i, future in enumerate(futures) if i not in del_futures]
 
         # Signal threads to stop
         executor_stop.value = True
