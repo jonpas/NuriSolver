@@ -1,6 +1,6 @@
 # FERI-NuriSolver
 
-[Nurikabe](https://en.wikipedia.org/wiki/Nurikabe_(puzzle)) puzzle solver at Optimization Methods (slo. Optimizacijske Metode). 
+[Nurikabe](https://en.wikipedia.org/wiki/Nurikabe_(puzzle)) puzzle solver at Optimization Methods (slo. Optimizacijske Metode).
 
 Solves any-size Nurikabe using a series of logical procedures and rules. Harder puzzles use guess and backtrack in addition to logical solving steps.
 
@@ -8,7 +8,7 @@ Solves any-size Nurikabe using a series of logical procedures and rules. Harder 
 ## Usage
 
 ```
-usage: nurisolver.py [-h] [--plot] [--guess GUESS] [--verbose [VERBOSE]] [--debug] [file]
+usage: nurisolver.py [-h] [--plot] [--guess G] [--verbose [L]] [--debug] [--threads N] [file]
 
 Nurikabe Solver
 
@@ -18,13 +18,13 @@ positional arguments:
 optional arguments:
   -h, --help            show this help message and exit
   --plot, -p            plot solution (requires pygame)
-  --guess GUESS, -g GUESS
-                        guess steps when logic is exhausted, limited by maximum amount of failed guesses
-                        (default: 500)
-  --verbose [VERBOSE], -v [VERBOSE]
-                        plot solving steps on mouse button or space key press (requires pygame), optionally
-                        start on given step
+  --guess G, -g G       guess steps when logic is exhausted, limited by maximum amount of failed
+                        guesses (default: 500)
+  --verbose [L], -v [L]
+                        plot solving steps on mouse button or space key press (requires pygame),
+                        optionally start on given step
   --debug, -d           log debug steps and plot additional information (requires pygame)
+  --threads N, -j N     use threads for guessing
 ```
 
 
