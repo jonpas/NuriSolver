@@ -950,7 +950,7 @@ class TestSolver(unittest.TestCase):
                 if os.path.exists(solution_file):
                     solution = load(solution_file, dot_value=State.SEA)
 
-                    solver = Solver(puzzle)
+                    solver = Solver(puzzle, threads=4)
 
                     start = time.process_time()
                     success = solver.solve()
